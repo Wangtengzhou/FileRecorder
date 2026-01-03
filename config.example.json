@@ -1,0 +1,25 @@
+{
+    "database": {
+        "path": "data/fileindex.db"
+    },
+    "ai": {
+        "api_key": "",
+        "base_url": "",
+        "model": "gpt-4o-mini"
+    },
+    "scanner": {
+        "timeout_seconds": 5,
+        "batch_size": 1000,
+        "ignore_patterns": [
+            ".*",
+            "$RECYCLE.BIN",
+            "System Volume Information",
+            "Thumbs.db"
+        ]
+    },
+    "ui": {
+        "window_width": 1200,
+        "window_height": 800,
+        "remember_window_size": true
+    }
+}
