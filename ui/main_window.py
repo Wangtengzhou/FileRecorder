@@ -2,9 +2,12 @@
 FileRecorder 主窗口
 """
 import subprocess
+import sys
+import os
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Slot
+from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QToolBar, QStatusBar, QLineEdit, QPushButton,
@@ -12,7 +15,6 @@ from PySide6.QtWidgets import (
     QProgressBar, QLabel, QSplitter, QTreeWidget, QTreeWidgetItem,
     QMenu, QComboBox
 )
-from PySide6.QtGui import QAction
 
 from database.db_manager import DatabaseManager
 from scanner.file_scanner import FileScanner, ScannerThread
@@ -21,6 +23,13 @@ from ui.file_browser import FileBrowserModel
 from ui.scan_dialog import MultiFolderScanDialog
 from ui.progress_dialog import ScanProgressDialog
 from config import config
+
+
+def resource_path(relative_path):
+    """获取资源绝对路径（支持 PyInstaller 打包）"""
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
 
 
 class SelectAllLineEdit(QLineEdit):
@@ -55,6 +64,11 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("FileRecorder - 智能文件索引助手")
+        # 设置窗口图标
+        icon_path = resource_path("logo.png")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+            
         self.resize(
             config.get("ui", "window_width", default=1200),
             config.get("ui", "window_height", default=800)
@@ -68,6 +82,10 @@ class MainWindow(QMainWindow):
         self.scan_queue = []  # 待扫描路径队列
         self.current_scan_path = None
         self.progress_dialog = None  # 进度对话框
+        # 扫描累计统计（用于多目录扫描汇总）
+        self._scan_total_files = 0
+        self._scan_total_errors = 0
+        self._scan_paths_count = 0
         
         # 浏览模式: 'browser'(逐级) 或 'flat'(平铺)
         self.view_mode = 'browser'
@@ -534,10 +552,17 @@ class MainWindow(QMainWindow):
         if not paths:
             return
         
-        # 加入队列
-        self.scan_queue = paths.copy()
-        # 开始扫描第一个
-        self._scan_next_in_queue()
+        # 重置累计统计
+        self._scan_total_files = 0
+        self._scan_total_errors = 0
+        self._scan_paths_count = len(paths)
+        
+        # 第一个路径用 _start_scan 创建对话框
+        first_path = paths[0]
+        # 剩余的加入队列
+        self.scan_queue = paths[1:] if len(paths) > 1 else []
+        # 启动第一个扫描（会创建进度对话框）
+        self._start_scan(first_path)
     
     def _scan_next_in_queue(self):
         """扫描队列中的下一个路径"""
@@ -548,7 +573,29 @@ class MainWindow(QMainWindow):
         
         path = self.scan_queue.pop(0)
         self.current_scan_path = path
-        self._start_scan(path)
+        
+        # 复用现有对话框，只更新标题
+        if self.progress_dialog:
+            remaining = len(self.scan_queue)
+            self.progress_dialog.set_title(f"正在扫描: {path}", "🔍")
+        
+        # 创建新的扫描器和线程
+        scanner = FileScanner(
+            db=self.db,
+            batch_size=config.get("scanner", "batch_size", default=1000),
+            ignore_patterns=config.get("scanner", "ignore_patterns"),
+            timeout=config.get("scanner", "timeout_seconds", default=5)
+        )
+        
+        self.scanner_thread = ScannerThread(scanner, path)
+        self.scanner_thread.progress.connect(self._on_scan_progress)
+        if self.progress_dialog:
+            self.scanner_thread.progress.connect(self.progress_dialog.update_progress)
+        self.scanner_thread.finished.connect(self._on_scan_finished)
+        self.scanner_thread.error.connect(self._on_scan_error)
+        
+        self.statusbar.showMessage("扫描中...")
+        self.scanner_thread.start()
     
     def _start_scan(self, path: str):
         """开始扫描指定路径"""
@@ -559,9 +606,15 @@ class MainWindow(QMainWindow):
         # 保存当前扫描路径
         self.current_scan_path = path
         
+        # 初始化累计统计（仅在非队列模式下，即直接调用 _start_scan 时）
+        if self._scan_paths_count == 0:
+            self._scan_total_files = 0
+            self._scan_total_errors = 0
+            self._scan_paths_count = 1
+        
         # 创建进度对话框
         self.progress_dialog = ScanProgressDialog("正在扫描", self)
-        self.progress_dialog.set_title(f"正在扫描: {Path(path).name}", "🔍")
+        self.progress_dialog.set_title(f"正在扫描: {path}", "🔍")
         self.progress_dialog.stop_requested.connect(self._on_stop_scan)
         
         # 创建扫描器（传入db实现分批写入，清理旧数据由扫描器负责）
@@ -585,7 +638,7 @@ class MainWindow(QMainWindow):
         
         # 隐藏底部进度条（进度对话框已有进度条）
         self.progress_bar.setVisible(False)
-        self.statusbar.showMessage(f"正在扫描: {path}")
+        self.statusbar.showMessage("扫描中...")
         
         # 启动扫描并显示对话框
         self.scanner_thread.start()
@@ -625,13 +678,18 @@ class MainWindow(QMainWindow):
                     scan_source
                 )
         
+        # 累计统计
+        self._scan_total_files += result.get('file_count', 0)
+        self._scan_total_errors += result.get('error_count', 0)
+        
         # 检查是否还有队列
         remaining = len(self.scan_queue)
         
         if remaining > 0:
             # 还有待扫描项目，更新对话框并继续扫描
+            completed = self._scan_paths_count - remaining
             if self.progress_dialog:
-                self.progress_dialog.set_title(f"扫描队列 ({remaining} 个待处理)", "📋")
+                self.progress_dialog.set_title(f"扫描进度 ({completed}/{self._scan_paths_count})", "📋")
             self.statusbar.showMessage(
                 f"完成: {result['scan_source']} ({result['file_count']}个文件) | 剩余 {remaining} 个路径"
             )
@@ -639,14 +697,12 @@ class MainWindow(QMainWindow):
             return
         
         # 队列全部完成
-        # 更新进度对话框
+        # 更新进度对话框 - 显示累计汇总
         if self.progress_dialog:
-            scanned_files = result.get('file_count', 0)
-            error_count = result.get('error_count', 0)
             if result['cancelled']:
                 self.progress_dialog.set_cancelled()
             else:
-                self.progress_dialog.set_finished(scanned_files, error_count)
+                self.progress_dialog.set_finished(self._scan_total_files, self._scan_total_errors)
         
         # 恢复工具栏UI状态
         self.scan_action.setText("🔍 开始扫描")
@@ -662,11 +718,13 @@ class MainWindow(QMainWindow):
         # 获取最新统计
         stats = self.db.get_stats()
         
-        # 更新状态栏
-        scanned_files = result.get('file_count', 0)
-        msg = f"扫描完成！本次扫描到 {scanned_files} 个文件，数据库共 {stats['total_files']} 条记录"
-        if result['error_count'] > 0:
-            msg += f"，{result['error_count']} 个文件读取失败"
+        # 更新状态栏 - 显示累计汇总
+        if self._scan_paths_count > 1:
+            msg = f"扫描完成！共扫描 {self._scan_paths_count} 个目录，{self._scan_total_files} 个文件，数据库共 {stats['total_files']} 条记录"
+        else:
+            msg = f"扫描完成！本次扫描到 {self._scan_total_files} 个文件，数据库共 {stats['total_files']} 条记录"
+        if self._scan_total_errors > 0:
+            msg += f"，{self._scan_total_errors} 个文件读取失败"
         if result['cancelled']:
             msg = "扫描已取消 | " + msg
         
@@ -674,6 +732,9 @@ class MainWindow(QMainWindow):
         
         # 更新错误计数
         self._update_error_count()
+        
+        # 重置统计变量
+        self._scan_paths_count = 0
     
     @Slot(str)
     def _on_scan_error(self, error: str):

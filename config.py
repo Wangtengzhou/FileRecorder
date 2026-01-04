@@ -2,6 +2,7 @@
 FileRecorder 配置管理模块
 """
 import json
+import sys
 from pathlib import Path
 
 
@@ -46,10 +47,18 @@ class Config:
         Args:
             config_path: 配置文件路径，默认为程序目录下的 config.json
         """
+        # 获取程序根目录
+        if getattr(sys, 'frozen', False):
+            # 打包后，使用 exe 所在目录
+            self.base_dir = Path(sys.executable).parent
+        else:
+            # 开发环境，使用当前文件所在目录
+            self.base_dir = Path(__file__).parent
+            
         if config_path:
             self.config_path = Path(config_path)
         else:
-            self.config_path = Path(__file__).parent / "config.json"
+            self.config_path = self.base_dir / "config.json"
         
         self._config = self.DEFAULTS.copy()
         self.load()
@@ -121,7 +130,7 @@ class Config:
         db_path = self.get("database", "path")
         path = Path(db_path)
         if not path.is_absolute():
-            path = Path(__file__).parent / path
+            path = self.base_dir / path
         return path
     
     @property
