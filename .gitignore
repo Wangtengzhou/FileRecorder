@@ -34,3 +34,7 @@ dist/
 
 # Logs
 *.log
+
+# Development files (not for release)
+原图.png
+开发规划书.md
