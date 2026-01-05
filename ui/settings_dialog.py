@@ -1,7 +1,7 @@
 """
 FileRecorder 设置对话框
 """
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLineEdit, QPushButton, QTabWidget, QWidget,
@@ -9,6 +9,22 @@ from PySide6.QtWidgets import (
 )
 
 from config import config
+from ai.client import test_api_connection
+
+
+class ApiTestThread(QThread):
+    """API 检测线程"""
+    finished = Signal(bool, str)  # 成功, 消息
+    
+    def __init__(self, api_key, base_url, model):
+        super().__init__()
+        self.api_key = api_key
+        self.base_url = base_url
+        self.model = model
+    
+    def run(self):
+        success, msg = test_api_connection(self.api_key, self.base_url, self.model)
+        self.finished.emit(success, msg)
 
 
 class SettingsDialog(QDialog):
@@ -19,6 +35,7 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("设置")
         self.setMinimumSize(500, 400)
         
+        self._test_thread = None
         self._init_ui()
         self._load_settings()
     
@@ -36,13 +53,31 @@ class SettingsDialog(QDialog):
         ai_group = QGroupBox("AI接口配置")
         ai_form = QFormLayout(ai_group)
         
+        # API 密钥行（带检测按钮和显示/隐藏按钮）
+        api_key_layout = QHBoxLayout()
         self.api_key_input = QLineEdit()
         self.api_key_input.setEchoMode(QLineEdit.Password)
         self.api_key_input.setPlaceholderText("输入您的API密钥")
-        ai_form.addRow("API 密钥:", self.api_key_input)
+        api_key_layout.addWidget(self.api_key_input)
+        
+        self.show_key_btn = QPushButton("👁")
+        self.show_key_btn.setFixedWidth(30)
+        self.show_key_btn.setToolTip("显示/隐藏密钥")
+        self.show_key_btn.clicked.connect(self._toggle_key_visibility)
+        api_key_layout.addWidget(self.show_key_btn)
+        
+        self.test_btn = QPushButton("检测")
+        self.test_btn.setFixedWidth(80)
+        self.test_btn.clicked.connect(self._on_test_api)
+        api_key_layout.addWidget(self.test_btn)
+        
+        api_key_widget = QWidget()
+        api_key_widget.setLayout(api_key_layout)
+        ai_form.addRow("API 密钥:", api_key_widget)
         
         self.base_url_input = QLineEdit()
         self.base_url_input.setPlaceholderText("留空使用默认OpenAI地址，或输入自定义地址如 https://api.deepseek.com")
+        self.base_url_input.textChanged.connect(self._update_api_preview)
         ai_form.addRow("接口地址:", self.base_url_input)
         
         self.model_input = QLineEdit()
@@ -51,7 +86,13 @@ class SettingsDialog(QDialog):
         
         ai_layout.addWidget(ai_group)
         
-        # 说明文字
+        # 预览和说明文字
+        self.preview_label = QLabel()
+        self.preview_label.setStyleSheet("color: #0066cc; font-size: 11px;")
+        self.preview_label.setWordWrap(True)
+        self._update_api_preview()  # 初始化预览
+        ai_layout.addWidget(self.preview_label)
+        
         note_label = QLabel(
             "提示：本软件使用OpenAI兼容格式接口，支持以下服务：\n"
             "• OpenAI: 留空接口地址\n"
@@ -162,4 +203,69 @@ class SettingsDialog(QDialog):
         # 界面设置
         config.set("ui", "remember_window_size", value=self.remember_size_check.isChecked())
         
+        config.save()
         self.accept()
+    
+    def _on_test_api(self):
+        """点击检测按钮"""
+        api_key = self.api_key_input.text().strip()
+        base_url = self.base_url_input.text().strip()
+        model = self.model_input.text().strip() or "gpt-4o-mini"
+        
+        if not api_key:
+            self._show_test_result(False, "请先输入 API 密钥")
+            return
+        
+        # 显示加载状态
+        self.test_btn.setText("⏳")
+        self.test_btn.setEnabled(False)
+        self.test_btn.setStyleSheet("")
+        
+        # 启动后台线程
+        self._test_thread = ApiTestThread(api_key, base_url, model)
+        self._test_thread.finished.connect(self._on_test_finished)
+        self._test_thread.start()
+    
+    def _on_test_finished(self, success: bool, msg: str):
+        """API 检测完成"""
+        self._show_test_result(success, msg)
+    
+    def _show_test_result(self, success: bool, msg: str):
+        """显示检测结果"""
+        self.test_btn.setEnabled(True)
+        
+        if success:
+            self.test_btn.setText("✓ 成功")
+            self.test_btn.setStyleSheet("color: green; font-weight: bold;")
+        else:
+            self.test_btn.setText("✗ 失败")
+            self.test_btn.setStyleSheet("color: red; font-weight: bold;")
+            self.test_btn.setToolTip(msg)
+        
+        # 3秒后恢复按钮状态
+        # 5秒后恢复按钮状态
+        QTimer.singleShot(5000, self._reset_test_btn)
+    
+    def _reset_test_btn(self):
+        """恢复检测按钮状态"""
+        self.test_btn.setText("检测")
+        self.test_btn.setStyleSheet("")
+        self.test_btn.setToolTip("")
+    
+    def _toggle_key_visibility(self):
+        """切换 API 密钥显示/隐藏"""
+        if self.api_key_input.echoMode() == QLineEdit.Password:
+            self.api_key_input.setEchoMode(QLineEdit.Normal)
+            self.show_key_btn.setText("🙈")
+        else:
+            self.api_key_input.setEchoMode(QLineEdit.Password)
+            self.show_key_btn.setText("👁")
+    
+    def _update_api_preview(self):
+        """更新 API 地址预览"""
+        base_url = self.base_url_input.text().strip()
+        if not base_url:
+            base_url = "https://api.openai.com/v1"
+        base_url = base_url.rstrip("/")
+        full_url = f"{base_url}/chat/completions"
+        self.preview_label.setText(f"📍 实际请求地址: {full_url}")
