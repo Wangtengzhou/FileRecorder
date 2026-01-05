@@ -268,4 +268,4 @@ class SettingsDialog(QDialog):
             base_url = "https://api.openai.com/v1"
         base_url = base_url.rstrip("/")
         full_url = f"{base_url}/chat/completions"
-        self.preview_label.setText(f"📍 实际请求地址: {full_url}")
+        self.preview_label.setText(f"实际请求地址: {full_url}")

@@ -296,6 +296,8 @@ class MainWindow(QMainWindow):
         self.stats_label = QLabel()
         self.statusbar.addPermanentWidget(self.stats_label)
         
+        # 确保初始状态栏消息为空
+        self.statusbar.clearMessage()
         self._update_stats()
     
     def _update_stats(self):
@@ -783,11 +785,12 @@ class MainWindow(QMainWindow):
             self.view_toggle_btn.setText("📂 浏览视图")
             self.back_btn.setEnabled(False)
             self.path_label.setText(f"搜索结果: '{keyword}' ({len(files)} 个文件)")
+            
+            # 只在搜索时显示状态栏消息
+            self.statusbar.showMessage(f"找到 {len(files)} 个匹配文件")
         else:
             # 空搜索切换回浏览视图
             self._on_go_home()
-        
-        self.statusbar.showMessage(f"找到 {len(files) if keyword or extension else 0} 个匹配文件")
     
     @Slot()
     def _on_clear_search(self):
@@ -903,6 +906,9 @@ class MainWindow(QMainWindow):
         self.browser_model.navigate_to(path)
         self._update_nav_ui()
         self.view_toggle_btn.setText("📋 平铺视图")
+        
+        # 清除状态栏搜索结果提示
+        self.statusbar.clearMessage()
     
     def _navigate_and_select(self, folder_path: str, filename: str):
         """导航到目录并选中指定文件"""

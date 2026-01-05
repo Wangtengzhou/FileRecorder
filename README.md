@@ -75,11 +75,26 @@ FileRecorder/
 | 配置项 | 说明 |
 |--------|------|
 | `ai.api_key` | OpenAI 兼容 API 的密钥 |
-| `ai.base_url` | 自定义 API 地址（如 DeepSeek） |
+| `ai.base_url` | 自定义 API 地址（见下表） |
+| `ai.model` | 模型名称 |
 | `scanner.batch_size` | 扫描批次大小（默认1000） |
 | `scanner.ignore_patterns` | 忽略的文件/目录模式 |
 
 > ⚠️ `config.json` 包含敏感信息，已在 `.gitignore` 中排除
+
+### 支持的 AI 服务
+
+本软件使用 OpenAI Chat Completions API 格式，兼容以下服务：
+
+| 服务 | 接口地址 | 模型示例 |
+|------|----------|----------|
+| OpenAI | 留空 | gpt-4o-mini |
+| DeepSeek | `https://api.deepseek.com` | deepseek-chat |
+| 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | qwen-turbo |
+| Ollama（本地） | `http://localhost:11434/v1` | llama3, qwen2 |
+| LM Studio（本地） | `http://localhost:1234/v1` | 本地模型名 |
+| Groq | `https://api.groq.com/openai/v1` | llama-3.1-70b |
+| OpenRouter | `https://openrouter.ai/api/v1` | 多模型 |
 
 ---
 
@@ -92,7 +107,22 @@ FileRecorder/
 
 ---
 
+## ⚠️ 注意事项
+
+- **搜索结果上限**: 搜索功能最多返回 1000 条结果，这是为了保证 UI 响应速度。如果结果过多，建议细化搜索关键词或使用扩展名过滤。
+
+---
+
+## 🗓️ 开发计划
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| AI 智能分类 | 开发中 | 基于 OpenAI 兼容 API |
+| HTML 导出 | 计划中 | 参考 Snap2HTML，生成可离线浏览的 HTML 文件 |
+| 增量扫描 | 计划中 | 只扫描变化的文件 |
+
+---
+
 ## 📝 许可证
 
 MIT License
-
