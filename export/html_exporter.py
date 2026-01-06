@@ -1,0 +1,975 @@
+"""
+HTML 导出模块 - 生成可离线浏览的单 HTML 文件
+参考 Snap2HTML 项目
+"""
+import json
+import os
+from pathlib import Path
+from typing import Callable, Optional
+from datetime import datetime
+
+
+class HtmlExporter:
+    """HTML 导出器"""
+    
+    def __init__(self, db_manager):
+        """
+        初始化导出器
+        
+        Args:
+            db_manager: 数据库管理器实例
+        """
+        self.db = db_manager
+        self.template_path = Path(__file__).parent / "template.html"
+    
+    def export(self, output_path: str, progress_callback: Optional[Callable] = None) -> bool:
+        """
+        导出为 HTML 文件
+        
+        Args:
+            output_path: 输出文件路径
+            progress_callback: 进度回调函数 (current, total, message)
+            
+        Returns:
+            是否成功
+        """
+        try:
+            # 1. 获取所有文件数据
+            if progress_callback:
+                progress_callback(0, 100, "正在读取数据库...")
+            
+            files = self._get_all_files()
+            total_items = len(files)
+            # 统计文件和文件夹数量
+            total_files = sum(1 for f in files if not f[4])  # is_dir = 0
+            total_folders = sum(1 for f in files if f[4])    # is_dir = 1
+            
+            if progress_callback:
+                progress_callback(20, 100, f"读取到 {total_files} 个文件和 {total_folders} 个文件夹，正在构建树形结构...")
+            
+            # 2. 构建树形结构
+            tree = self._build_tree(files)
+            
+            if progress_callback:
+                progress_callback(60, 100, "正在生成 HTML...")
+            
+            # 3. 生成 JSON 数据
+            data = {
+                "metadata": {
+                    "generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "totalFiles": total_files,
+                    "totalFolders": total_folders,
+                    "source": "FileRecorder"
+                },
+                "tree": tree
+            }
+            
+            # 4. 读取模板并替换
+            template = self._read_template()
+            json_data = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
+            html_content = template.replace("/*{{DATA_PLACEHOLDER}}*/", f"const DATA = {json_data};")
+            
+            if progress_callback:
+                progress_callback(80, 100, "正在写入文件...")
+            
+            # 5. 写入文件
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+            
+            if progress_callback:
+                progress_callback(100, 100, "导出完成")
+            
+            return True
+            
+        except Exception as e:
+            print(f"HTML 导出失败: {e}")
+            return False
+    
+    def _get_all_files(self) -> list:
+        """获取所有文件记录"""
+        with self.db._get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT f.filename, f.extension, f.size_bytes, f.mtime, f.is_dir, fo.path
+                FROM files f
+                JOIN folders fo ON f.folder_id = fo.id
+                ORDER BY fo.path, f.is_dir DESC, f.filename
+            """)
+            return cursor.fetchall()
+    
+    def _build_tree(self, files: list) -> list:
+        """
+        将平铺文件列表构建为树形结构
+        
+        Returns:
+            树形结构列表（顶级目录列表）
+        """
+        # 使用字典存储目录节点
+        nodes = {}
+        roots = []
+        
+        for row in files:
+            name, ext, size, mtime, is_dir, full_path = row
+            
+            # 解析路径
+            path_parts = full_path.replace('/', '\\').split('\\')
+            
+            # 逐级创建目录节点
+            current_path = ""
+            parent_node = None
+            
+            for i, part in enumerate(path_parts):
+                if not part:
+                    continue
+                    
+                current_path = current_path + "\\" + part if current_path else part
+                
+                if current_path not in nodes:
+                    node = {
+                        "n": part,
+                        "c": [],  # children (dirs)
+                        "f": []   # files
+                    }
+                    nodes[current_path] = node
+                    
+                    if parent_node is None:
+                        # 这是顶级目录
+                        roots.append(node)
+                    else:
+                        parent_node["c"].append(node)
+                
+                parent_node = nodes[current_path]
+            
+            # 添加文件到当前目录
+            if parent_node and not is_dir:
+                file_entry = {"n": name}
+                if size:
+                    file_entry["s"] = size
+                if mtime:
+                    file_entry["t"] = int(mtime) if mtime else 0
+                parent_node["f"].append(file_entry)
+        
+        return roots
+    
+    def _read_template(self) -> str:
+        """读取 HTML 模板"""
+        if self.template_path.exists():
+            with open(self.template_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        else:
+            # 返回内置模板
+            return self._get_builtin_template()
+    
+    def _get_builtin_template(self) -> str:
+        """获取内置 HTML 模板"""
+        return '''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FileRecorder Export</title>
+    <style>
+        :root {
+            --bg-primary: #1e1e1e;
+            --bg-secondary: #252526;
+            --bg-hover: #2a2d2e;
+            --text-primary: #cccccc;
+            --text-secondary: #858585;
+            --border-color: #3c3c3c;
+            --accent-color: #0078d4;
+            --icon-folder: #dcb67a;
+            --icon-file: #c5c5c5;
+        }
+        
+        [data-theme="light"] {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f3f3f3;
+            --bg-hover: #e8e8e8;
+            --text-primary: #333333;
+            --text-secondary: #6e6e6e;
+            --border-color: #e0e0e0;
+            --accent-color: #0078d4;
+            --icon-folder: #dcb67a;
+            --icon-file: #6e6e6e;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-size: 13px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        /* Header */
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            padding: 8px 16px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-shrink: 0;
+        }
+        
+        .header h1 {
+            font-size: 14px;
+            font-weight: 500;
+            flex-shrink: 0;
+        }
+        
+        .search-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex: 1;
+        }
+        
+        .search-box {
+            flex: 1;
+            max-width: 400px;
+            position: relative;
+        }
+        
+        .search-box input {
+            width: 100%;
+            padding: 6px 12px 6px 32px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 13px;
+            outline: none;
+        }
+        
+        .search-box input:focus {
+            border-color: var(--accent-color);
+        }
+        
+        .search-box svg {
+            position: absolute;
+            left: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 14px;
+            height: 14px;
+            fill: var(--text-secondary);
+        }
+        
+        .search-btns {
+            display: flex;
+            gap: 4px;
+        }
+        
+        .search-btns button {
+            padding: 6px 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-size: 12px;
+            cursor: pointer;
+        }
+        
+        .search-btns button:hover {
+            background: var(--bg-hover);
+        }
+        
+        /* Theme dropdown */
+        .theme-wrapper {
+            position: relative;
+        }
+        
+        .theme-btn {
+            padding: 6px 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+        }
+        
+        .theme-btn:hover {
+            background: var(--bg-hover);
+        }
+        
+        .theme-btn svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+        }
+        
+        .theme-dropdown {
+            display: none;
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 4px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            min-width: 120px;
+            z-index: 100;
+            overflow: hidden;
+        }
+        
+        .theme-dropdown.show {
+            display: block;
+        }
+        
+        .theme-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        
+        .theme-option:hover {
+            background: var(--bg-hover);
+        }
+        
+        .theme-option.active {
+            background: var(--accent-color);
+            color: white;
+        }
+        
+        .theme-option svg {
+            width: 14px;
+            height: 14px;
+            fill: currentColor;
+        }
+        
+        /* Main Content */
+        .main {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        
+        /* Sidebar - Tree */
+        .sidebar {
+            width: 280px;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            overflow: auto;
+            flex-shrink: 0;
+        }
+        
+        .tree-item {
+            cursor: pointer;
+            user-select: none;
+        }
+        
+        .tree-item-content {
+            display: flex;
+            align-items: center;
+            padding: 4px 8px;
+            gap: 4px;
+        }
+        
+        .tree-item-content:hover {
+            background: var(--bg-hover);
+        }
+        
+        .tree-item-content.selected {
+            background: var(--accent-color);
+            color: white;
+        }
+        
+        .tree-toggle {
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        
+        .tree-toggle svg {
+            width: 10px;
+            height: 10px;
+            fill: var(--text-secondary);
+            transition: transform 0.15s;
+        }
+        
+        .tree-item.expanded > .tree-item-content .tree-toggle svg {
+            transform: rotate(90deg);
+        }
+        
+        .tree-icon {
+            width: 16px;
+            height: 16px;
+            flex-shrink: 0;
+        }
+        
+        .tree-icon svg {
+            width: 16px;
+            height: 16px;
+            fill: var(--icon-folder);
+        }
+        
+        .tree-label {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .tree-children {
+            display: none;
+            padding-left: 16px;
+        }
+        
+        .tree-item.expanded > .tree-children {
+            display: block;
+        }
+        
+        /* File List */
+        .content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        .file-list-header {
+            display: flex;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            font-weight: 500;
+            flex-shrink: 0;
+        }
+        
+        .file-list-header > div,
+        .file-item > div {
+            padding: 6px 12px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .col-name { flex: 1; min-width: 200px; }
+        .col-size { width: 100px; text-align: right; }
+        .col-date { width: 140px; }
+        
+        .file-list {
+            flex: 1;
+            overflow: auto;
+        }
+        
+        .file-item {
+            display: flex;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .file-item:hover {
+            background: var(--bg-hover);
+        }
+        
+        .file-item .col-name {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .file-item .file-icon {
+            width: 16px;
+            height: 16px;
+            flex-shrink: 0;
+        }
+        
+        .file-item .file-icon svg {
+            width: 16px;
+            height: 16px;
+            fill: var(--icon-file);
+        }
+        
+        /* Footer */
+        .footer {
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border-color);
+            padding: 6px 16px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+        
+        /* Search highlight */
+        .highlight {
+            background: #ffff00;
+            color: #000;
+        }
+        
+        [data-theme="dark"] .highlight {
+            background: #665c00;
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>FileRecorder</h1>
+        <div class="search-group">
+            <div class="search-box">
+                <svg viewBox="0 0 16 16"><path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/></svg>
+                <input type="text" id="searchInput" placeholder="搜索文件名...">
+            </div>
+            <div class="search-btns">
+                <button id="searchBtn">搜索</button>
+                <button id="clearBtn">清除</button>
+            </div>
+        </div>
+        <div class="theme-wrapper">
+            <button class="theme-btn" id="themeBtn" title="切换主题">
+                <svg id="themeIcon" viewBox="0 0 16 16"></svg>
+            </button>
+            <div class="theme-dropdown" id="themeDropdown">
+                <div class="theme-option" data-theme="light">
+                    <svg viewBox="0 0 16 16"><path d="M8 11a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm0 1a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM8 0a.5.5 0 0 1 .5.5v2a.5.5 0 0 1-1 0v-2A.5.5 0 0 1 8 0zm0 13a.5.5 0 0 1 .5.5v2a.5.5 0 0 1-1 0v-2A.5.5 0 0 1 8 13zm8-5a.5.5 0 0 1-.5.5h-2a.5.5 0 0 1 0-1h2a.5.5 0 0 1 .5.5zM3 8a.5.5 0 0 1-.5.5h-2a.5.5 0 0 1 0-1h2A.5.5 0 0 1 3 8z"/></svg>
+                    <span>浅色</span>
+                </div>
+                <div class="theme-option" data-theme="dark">
+                    <svg viewBox="0 0 16 16"><path d="M6 .278a.768.768 0 0 1 .08.858 7.208 7.208 0 0 0-.878 3.46c0 4.021 3.278 7.277 7.318 7.277.527 0 1.04-.055 1.533-.16a.787.787 0 0 1 .81.316.733.733 0 0 1-.031.893A8.349 8.349 0 0 1 8.344 16C3.734 16 0 12.286 0 7.71 0 4.266 2.114 1.312 5.124.06A.752.752 0 0 1 6 .278z"/></svg>
+                    <span>深色</span>
+                </div>
+                <div class="theme-option" data-theme="auto">
+                    <svg viewBox="0 0 16 16"><path d="M0 4s0-2 2-2h12s2 0 2 2v6s0 2-2 2h-4c0 .667.083 1.167.25 1.5H11a.5.5 0 0 1 0 1H5a.5.5 0 0 1 0-1h.75c.167-.333.25-.833.25-1.5H2s-2 0-2-2V4zm1.398-.855a.758.758 0 0 0-.254.302A1.46 1.46 0 0 0 1 4.01V10c0 .325.078.502.145.602.07.105.17.188.302.254a1.464 1.464 0 0 0 .538.143L2.01 11H14c.325 0 .502-.078.602-.145a.758.758 0 0 0 .254-.302 1.464 1.464 0 0 0 .143-.538L15 9.99V4c0-.325-.078-.502-.145-.602a.757.757 0 0 0-.302-.254A1.46 1.46 0 0 0 13.99 3H2c-.325 0-.502.078-.602.145z"/></svg>
+                    <span>系统</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="main">
+        <div class="sidebar" id="treeContainer"></div>
+        <div class="content">
+            <div class="file-list-header">
+                <div class="col-name">名称</div>
+                <div class="col-size">大小</div>
+                <div class="col-date">修改时间</div>
+            </div>
+            <div class="file-list" id="fileList"></div>
+        </div>
+    </div>
+    
+    <div class="footer" id="footer">正在加载...</div>
+
+    <script>
+        /*{{DATA_PLACEHOLDER}}*/
+        
+        // Icons
+        const ICONS = {
+            folder: '<svg viewBox="0 0 16 16"><path d="M.54 3.87L.5 3a2 2 0 0 1 2-2h3.672a2 2 0 0 1 1.414.586l.828.828A2 2 0 0 0 9.828 3H14a2 2 0 0 1 2 2v1H0a1 1 0 0 1 0-.13zM0 13V6a.5.5 0 0 1 .5-.5h15a.5.5 0 0 1 .5.5v7a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2z"/></svg>',
+            file: '<svg viewBox="0 0 16 16"><path d="M4 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4.5L9.5 0H4zm5.5 0v4a.5.5 0 0 0 .5.5h4L9.5 0z"/></svg>',
+            chevron: '<svg viewBox="0 0 16 16"><path d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708z"/></svg>'
+        };
+        
+        let selectedNode = null;
+        let currentTheme = 'auto';
+        
+        // Theme Icons
+        const THEME_ICONS = {
+            light: '<path d="M8 11a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm0 1a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM8 0a.5.5 0 0 1 .5.5v2a.5.5 0 0 1-1 0v-2A.5.5 0 0 1 8 0zm0 13a.5.5 0 0 1 .5.5v2a.5.5 0 0 1-1 0v-2A.5.5 0 0 1 8 13zm8-5a.5.5 0 0 1-.5.5h-2a.5.5 0 0 1 0-1h2a.5.5 0 0 1 .5.5zM3 8a.5.5 0 0 1-.5.5h-2a.5.5 0 0 1 0-1h2A.5.5 0 0 1 3 8z"/>',
+            dark: '<path d="M6 .278a.768.768 0 0 1 .08.858 7.208 7.208 0 0 0-.878 3.46c0 4.021 3.278 7.277 7.318 7.277.527 0 1.04-.055 1.533-.16a.787.787 0 0 1 .81.316.733.733 0 0 1-.031.893A8.349 8.349 0 0 1 8.344 16C3.734 16 0 12.286 0 7.71 0 4.266 2.114 1.312 5.124.06A.752.752 0 0 1 6 .278z"/>',
+            auto: '<path d="M0 4s0-2 2-2h12s2 0 2 2v6s0 2-2 2h-4c0 .667.083 1.167.25 1.5H11a.5.5 0 0 1 0 1H5a.5.5 0 0 1 0-1h.75c.167-.333.25-.833.25-1.5H2s-2 0-2-2V4zm1.398-.855a.758.758 0 0 0-.254.302A1.46 1.46 0 0 0 1 4.01V10c0 .325.078.502.145.602.07.105.17.188.302.254a1.464 1.464 0 0 0 .538.143L2.01 11H14c.325 0 .502-.078.602-.145a.758.758 0 0 0 .254-.302 1.464 1.464 0 0 0 .143-.538L15 9.99V4c0-.325-.078-.502-.145-.602a.757.757 0 0 0-.302-.254A1.46 1.46 0 0 0 13.99 3H2c-.325 0-.502.078-.602.145z"/>'
+        };
+        
+        // Theme
+        function initTheme() {
+            currentTheme = localStorage.getItem('themeMode') || 'auto';
+            applyTheme();
+            updateThemeUI();
+        }
+        
+        function applyTheme() {
+            if (currentTheme === 'auto') {
+                document.body.dataset.theme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+            } else {
+                document.body.dataset.theme = currentTheme;
+            }
+        }
+        
+        function updateThemeUI() {
+            document.getElementById('themeIcon').innerHTML = THEME_ICONS[currentTheme];
+            document.querySelectorAll('.theme-option').forEach(opt => {
+                opt.classList.toggle('active', opt.dataset.theme === currentTheme);
+            });
+        }
+        
+        function setTheme(theme) {
+            currentTheme = theme;
+            localStorage.setItem('themeMode', theme);
+            applyTheme();
+            updateThemeUI();
+            document.getElementById('themeDropdown').classList.remove('show');
+        }
+        
+        function toggleThemeDropdown(e) {
+            e.stopPropagation();
+            document.getElementById('themeDropdown').classList.toggle('show');
+        }
+        
+        // Format helpers
+        function formatSize(bytes) {
+            if (!bytes) return '-';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            let i = 0;
+            while (bytes >= 1024 && i < units.length - 1) {
+                bytes /= 1024;
+                i++;
+            }
+            return bytes.toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
+        }
+        
+        function formatDate(timestamp) {
+            if (!timestamp) return '-';
+            const d = new Date(timestamp * 1000);
+            return d.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
+        }
+        
+        // Build tree
+        function buildTree(nodes, container) {
+            nodes.forEach(node => {
+                const item = document.createElement('div');
+                item.className = 'tree-item';
+                
+                const content = document.createElement('div');
+                content.className = 'tree-item-content';
+                
+                const hasChildren = node.c && node.c.length > 0;
+                
+                const toggle = document.createElement('span');
+                toggle.className = 'tree-toggle';
+                toggle.innerHTML = hasChildren ? ICONS.chevron : '';
+                content.appendChild(toggle);
+                
+                const icon = document.createElement('span');
+                icon.className = 'tree-icon';
+                icon.innerHTML = ICONS.folder;
+                content.appendChild(icon);
+                
+                const label = document.createElement('span');
+                label.className = 'tree-label';
+                label.textContent = node.n;
+                content.appendChild(label);
+                
+                item.appendChild(content);
+                
+                if (hasChildren) {
+                    const children = document.createElement('div');
+                    children.className = 'tree-children';
+                    buildTree(node.c, children);
+                    item.appendChild(children);
+                }
+                
+                // 点击箭头只展开/收起
+                toggle.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    if (hasChildren) {
+                        item.classList.toggle('expanded');
+                    }
+                });
+                
+                // 点击文件夹名称（非箭头区域）选择该文件夹
+                content.addEventListener('click', (e) => {
+                    // 如果点击的是箭头区域，不处理
+                    if (e.target === toggle || toggle.contains(e.target)) {
+                        return;
+                    }
+                    e.stopPropagation();
+                    selectNode(node, content, item);
+                });
+                
+                container.appendChild(item);
+            });
+        }
+        
+        function selectNode(node, element, treeItem) {
+            if (selectedNode) {
+                selectedNode.classList.remove('selected');
+            }
+            selectedNode = element;
+            element.classList.add('selected');
+            // 展开选中的文件夹
+            if (treeItem) {
+                treeItem.classList.add('expanded');
+            }
+            showFolderContents(node);
+        }
+        
+        function showFolderContents(node) {
+            const list = document.getElementById('fileList');
+            list.innerHTML = '';
+            
+            // 先显示子文件夹
+            if (node.c && node.c.length > 0) {
+                node.c.forEach(child => {
+                    const item = document.createElement('div');
+                    item.className = 'file-item';
+                    
+                    const name = document.createElement('div');
+                    name.className = 'col-name';
+                    
+                    const icon = document.createElement('span');
+                    icon.className = 'file-icon';
+                    icon.innerHTML = ICONS.folder;
+                    icon.querySelector('svg').style.fill = 'var(--icon-folder)';
+                    name.appendChild(icon);
+                    
+                    const label = document.createElement('span');
+                    label.textContent = child.n;
+                    name.appendChild(label);
+                    
+                    const size = document.createElement('div');
+                    size.className = 'col-size';
+                    size.textContent = '-';
+                    
+                    const date = document.createElement('div');
+                    date.className = 'col-date';
+                    date.textContent = '-';
+                    
+                    item.appendChild(name);
+                    item.appendChild(size);
+                    item.appendChild(date);
+                    list.appendChild(item);
+                });
+            }
+            
+            // 再显示文件
+            if (node.f && node.f.length > 0) {
+                node.f.forEach(file => {
+                    const item = document.createElement('div');
+                    item.className = 'file-item';
+                    
+                    const name = document.createElement('div');
+                    name.className = 'col-name';
+                    
+                    const icon = document.createElement('span');
+                    icon.className = 'file-icon';
+                    icon.innerHTML = ICONS.file;
+                    name.appendChild(icon);
+                    
+                    const label = document.createElement('span');
+                    label.textContent = file.n;
+                    name.appendChild(label);
+                    
+                    const size = document.createElement('div');
+                    size.className = 'col-size';
+                    size.textContent = formatSize(file.s);
+                    
+                    const date = document.createElement('div');
+                    date.className = 'col-date';
+                    date.textContent = formatDate(file.t);
+                    
+                    item.appendChild(name);
+                    item.appendChild(size);
+                    item.appendChild(date);
+                    list.appendChild(item);
+                });
+            }
+        }
+        
+        function showFiles(files, highlight = '') {
+            const list = document.getElementById('fileList');
+            list.innerHTML = '';
+            
+            files.forEach(file => {
+                const item = document.createElement('div');
+                item.className = 'file-item';
+                
+                const name = document.createElement('div');
+                name.className = 'col-name';
+                
+                const icon = document.createElement('span');
+                icon.className = 'file-icon';
+                icon.innerHTML = ICONS.file;
+                name.appendChild(icon);
+                
+                const label = document.createElement('span');
+                if (highlight) {
+                    label.innerHTML = file.n.replace(new RegExp(highlight, 'gi'), '<span class="highlight">$&</span>');
+                } else {
+                    label.textContent = file.n;
+                }
+                name.appendChild(label);
+                
+                const size = document.createElement('div');
+                size.className = 'col-size';
+                size.textContent = formatSize(file.s);
+                
+                const date = document.createElement('div');
+                date.className = 'col-date';
+                date.textContent = formatDate(file.t);
+                
+                item.appendChild(name);
+                item.appendChild(size);
+                item.appendChild(date);
+                list.appendChild(item);
+            });
+        }
+        
+        function showSearchResults(results, highlight = '') {
+            const list = document.getElementById('fileList');
+            list.innerHTML = '';
+            
+            results.forEach(item => {
+                const row = document.createElement('div');
+                row.className = 'file-item';
+                
+                const name = document.createElement('div');
+                name.className = 'col-name';
+                
+                const icon = document.createElement('span');
+                icon.className = 'file-icon';
+                icon.innerHTML = item.isDir ? ICONS.folder : ICONS.file;
+                // 文件夹图标使用黄色
+                if (item.isDir) {
+                    icon.querySelector('svg').style.fill = 'var(--icon-folder)';
+                }
+                name.appendChild(icon);
+                
+                const label = document.createElement('span');
+                const displayName = item.isDir ? item.n + ' (文件夹)' : item.n;
+                if (highlight) {
+                    label.innerHTML = displayName.replace(new RegExp(highlight, 'gi'), '<span class="highlight">$&</span>');
+                } else {
+                    label.textContent = displayName;
+                }
+                name.appendChild(label);
+                
+                // 显示路径
+                if (item.path) {
+                    const pathSpan = document.createElement('span');
+                    pathSpan.style.cssText = 'color: var(--text-secondary); font-size: 11px; margin-left: 8px;';
+                    pathSpan.textContent = item.path;
+                    name.appendChild(pathSpan);
+                }
+                
+                const size = document.createElement('div');
+                size.className = 'col-size';
+                size.textContent = item.isDir ? '-' : formatSize(item.s);
+                
+                const date = document.createElement('div');
+                date.className = 'col-date';
+                date.textContent = item.isDir ? '-' : formatDate(item.t);
+                
+                row.appendChild(name);
+                row.appendChild(size);
+                row.appendChild(date);
+                list.appendChild(row);
+            });
+        }
+        
+        // Search
+        let searchTimeout;
+        
+        function search(keyword) {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                if (!keyword) {
+                    const f = DATA.metadata.totalFiles.toLocaleString();
+                    const d = DATA.metadata.totalFolders ? DATA.metadata.totalFolders.toLocaleString() : '0';
+                    document.getElementById('footer').textContent = 
+                        `共 ${f} 个文件、${d} 个文件夹 · 生成于 ${DATA.metadata.generated}`;
+                    showFiles([]);
+                    return;
+                }
+                
+                const results = [];
+                const kw = keyword.toLowerCase();
+                
+                function searchNode(node, path) {
+                    // 搜索文件夹名称
+                    if (node.n.toLowerCase().includes(kw)) {
+                        results.push({n: node.n, isDir: true, path: path});
+                    }
+                    // 搜索文件
+                    if (node.f) {
+                        node.f.forEach(file => {
+                            if (file.n.toLowerCase().includes(kw)) {
+                                results.push({...file, path: path});
+                            }
+                        });
+                    }
+                    // 递归搜索子目录
+                    if (node.c) {
+                        const newPath = path ? path + '\\\\' + node.n : node.n;
+                        node.c.forEach(child => searchNode(child, newPath));
+                    }
+                }
+                
+                DATA.tree.forEach(node => searchNode(node, ''));
+                const displayResults = results.slice(0, 1000);
+                showSearchResults(displayResults, keyword);
+                
+                let footerText = `搜索 "${keyword}" - ${results.length} 个结果`;
+                if (results.length > 1000) {
+                    footerText += ` (显示前 1000 条)`;
+                }
+                document.getElementById('footer').textContent = footerText;
+            }, 300);
+        }
+        
+        function doSearch() {
+            search(document.getElementById('searchInput').value.trim());
+        }
+        
+        function clearSearch() {
+            document.getElementById('searchInput').value = '';
+            search('');
+        }
+        
+        // Init
+        document.addEventListener('DOMContentLoaded', () => {
+            initTheme();
+            
+            if (typeof DATA !== 'undefined') {
+                buildTree(DATA.tree, document.getElementById('treeContainer'));
+                const f = DATA.metadata.totalFiles.toLocaleString();
+                const d = DATA.metadata.totalFolders ? DATA.metadata.totalFolders.toLocaleString() : '0';
+                document.getElementById('footer').textContent = 
+                    `共 ${f} 个文件、${d} 个文件夹 · 生成于 ${DATA.metadata.generated}`;
+            }
+            
+            document.getElementById('searchInput').addEventListener('input', (e) => {
+                search(e.target.value.trim());
+            });
+            
+            document.getElementById('searchInput').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') doSearch();
+            });
+            
+            document.getElementById('searchBtn').addEventListener('click', doSearch);
+            document.getElementById('clearBtn').addEventListener('click', clearSearch);
+            document.getElementById('themeBtn').addEventListener('click', toggleThemeDropdown);
+            
+            document.querySelectorAll('.theme-option').forEach(opt => {
+                opt.addEventListener('click', () => setTheme(opt.dataset.theme));
+            });
+            
+            // 点击其他地方关闭下拉菜单
+            document.addEventListener('click', () => {
+                document.getElementById('themeDropdown').classList.remove('show');
+            });
+            
+            // 监听系统主题变化
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+                if (currentTheme === 'auto') applyTheme();
+            });
+        });
+    </script>
+</body>
+</html>'''
