@@ -115,4 +115,5 @@ FileRecorder/
 
 ## 📝 许可证
 
-MIT License
+GNU GPL v3 License
+
