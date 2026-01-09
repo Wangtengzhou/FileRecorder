@@ -35,6 +35,9 @@ dist/
 # Logs
 *.log
 
+# Assets to exclude
+原图.png
+
 # Development files (not for release)
 原图.png
 开发规划书.md
