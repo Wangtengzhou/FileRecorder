@@ -460,6 +460,24 @@ class HtmlExporter:
             white-space: nowrap;
         }
         
+        .file-list-header > div {
+            cursor: pointer;
+            user-select: none;
+        }
+        
+        .file-list-header > div:hover {
+            background: var(--bg-hover);
+        }
+        
+        .file-list-header > div.sorted::after {
+            content: ' ▲';
+            font-size: 10px;
+        }
+        
+        .file-list-header > div.sorted.desc::after {
+            content: ' ▼';
+        }
+        
         .col-name { flex: 1; min-width: 200px; }
         .col-size { width: 100px; text-align: right; }
         .col-date { width: 140px; }
@@ -504,6 +522,30 @@ class HtmlExporter:
             font-size: 12px;
             color: var(--text-secondary);
             flex-shrink: 0;
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        .footer-left, .footer-right {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .footer-right {
+            text-align: right;
+            flex-shrink: 0;
+            max-width: 50%;
+        }
+        
+        /* Clickable folder */
+        .file-item.folder-item {
+            cursor: pointer;
+        }
+        
+        .file-item.folder-item:hover {
+            background: var(--accent-color);
+            color: white;
         }
         
         /* Search highlight */
@@ -556,15 +598,18 @@ class HtmlExporter:
         <div class="sidebar" id="treeContainer"></div>
         <div class="content">
             <div class="file-list-header">
-                <div class="col-name">名称</div>
-                <div class="col-size">大小</div>
-                <div class="col-date">修改时间</div>
+                <div class="col-name" id="sortName" data-sort="name">名称</div>
+                <div class="col-size" id="sortSize" data-sort="size">大小</div>
+                <div class="col-date" id="sortDate" data-sort="date">修改时间</div>
             </div>
             <div class="file-list" id="fileList"></div>
         </div>
     </div>
     
-    <div class="footer" id="footer">正在加载...</div>
+    <div class="footer">
+        <span class="footer-left" id="footerLeft">正在加载...</span>
+        <span class="footer-right" id="footerRight"></span>
+    </div>
 
     <script>
         /*{{DATA_PLACEHOLDER}}*/
@@ -697,7 +742,7 @@ class HtmlExporter:
             });
         }
         
-        function selectNode(node, element, treeItem) {
+        function selectNode(node, element, treeItem, pushHistory = true) {
             if (selectedNode) {
                 selectedNode.classList.remove('selected');
             }
@@ -707,79 +752,212 @@ class HtmlExporter:
             if (treeItem) {
                 treeItem.classList.add('expanded');
             }
+            currentNode = node;
+            currentPath = getNodePath(node);
+            isShowingSearchResults = false;
             showFolderContents(node);
+            
+            // 添加到历史记录
+            if (pushHistory) {
+                pushHistoryState({type: 'folder', node: node, path: currentPath});
+            }
         }
         
-        function showFolderContents(node) {
+        // 获取节点路径
+        function getNodePath(targetNode) {
+            function findPath(nodes, target, path) {
+                for (const node of nodes) {
+                    const newPath = path ? path + '\\\\' + node.n : node.n;
+                    if (node === target) return newPath;
+                    if (node.c) {
+                        const found = findPath(node.c, target, newPath);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            }
+            return findPath(DATA.tree, targetNode, '') || '';
+        }
+        
+        // 更新底部信息显示
+        function updateFooterInfo() {
+            if (!currentNode) return;
+            
+            // 递归计算文件夹总体积
+            function calcSize(node) {
+                let size = 0;
+                if (node.f) {
+                    node.f.forEach(f => size += (f.s || 0));
+                }
+                if (node.c) {
+                    node.c.forEach(child => size += calcSize(child));
+                }
+                return size;
+            }
+            
+            // 计算当前文件夹的统计信息
+            const folderCount = currentNode.c ? currentNode.c.length : 0;
+            const fileCount = currentNode.f ? currentNode.f.length : 0;
+            const totalSize = calcSize(currentNode);
+            
+            document.getElementById('footerLeft').textContent = 
+                `${folderCount} 个文件夹、${fileCount} 个文件，共 ${formatSize(totalSize)}`;
+            document.getElementById('footerRight').textContent = currentPath || '';
+        }
+        
+        function updateFooterDefault() {
+            const f = DATA.metadata.totalFiles.toLocaleString();
+            const d = DATA.metadata.totalFolders ? DATA.metadata.totalFolders.toLocaleString() : '0';
+            document.getElementById('footerLeft').textContent = 
+                `共 ${f} 个文件、${d} 个文件夹 · 生成于 ${DATA.metadata.generated}`;
+            document.getElementById('footerRight').textContent = '';
+        }
+        
+        // 排序相关
+        let currentSort = {field: 'name', asc: true};
+        let currentNode = null;
+        let currentPath = '';
+        let currentItems = [];
+        
+        function sortItems(items, field, asc) {
+            return [...items].sort((a, b) => {
+                // 文件夹永远在前
+                if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+                
+                let va, vb;
+                if (field === 'name') {
+                    va = a.n.toLowerCase();
+                    vb = b.n.toLowerCase();
+                } else if (field === 'size') {
+                    va = a.s || 0;
+                    vb = b.s || 0;
+                } else if (field === 'date') {
+                    va = a.t || 0;
+                    vb = b.t || 0;
+                }
+                
+                if (va < vb) return asc ? -1 : 1;
+                if (va > vb) return asc ? 1 : -1;
+                return 0;
+            });
+        }
+        
+        function updateSortUI() {
+            document.querySelectorAll('.file-list-header > div').forEach(el => {
+                el.classList.remove('sorted', 'desc');
+            });
+            const sortEl = document.querySelector(`[data-sort="${currentSort.field}"]`);
+            if (sortEl) {
+                sortEl.classList.add('sorted');
+                if (!currentSort.asc) sortEl.classList.add('desc');
+            }
+        }
+        
+        function handleSort(field) {
+            if (currentSort.field === field) {
+                currentSort.asc = !currentSort.asc;
+            } else {
+                currentSort.field = field;
+                currentSort.asc = true;
+            }
+            updateSortUI();
+            renderCurrentItems();
+        }
+        
+        function renderCurrentItems() {
             const list = document.getElementById('fileList');
             list.innerHTML = '';
             
-            // 先显示子文件夹
+            const sorted = sortItems(currentItems, currentSort.field, currentSort.asc);
+            
+            sorted.forEach(item => {
+                const row = document.createElement('div');
+                row.className = item.isDir ? 'file-item folder-item' : 'file-item';
+                
+                const name = document.createElement('div');
+                name.className = 'col-name';
+                
+                const icon = document.createElement('span');
+                icon.className = 'file-icon';
+                icon.innerHTML = item.isDir ? ICONS.folder : ICONS.file;
+                if (item.isDir) {
+                    icon.querySelector('svg').style.fill = 'var(--icon-folder)';
+                }
+                name.appendChild(icon);
+                
+                const label = document.createElement('span');
+                label.textContent = item.n;
+                name.appendChild(label);
+                
+                const size = document.createElement('div');
+                size.className = 'col-size';
+                size.textContent = item.isDir ? '-' : formatSize(item.s);
+                
+                const date = document.createElement('div');
+                date.className = 'col-date';
+                date.textContent = item.isDir ? '-' : formatDate(item.t);
+                
+                row.appendChild(name);
+                row.appendChild(size);
+                row.appendChild(date);
+                
+                // 文件夹可点击跳转
+                if (item.isDir && item.nodeRef) {
+                    row.addEventListener('click', () => {
+                        navigateToNode(item.nodeRef);
+                    });
+                }
+                
+                list.appendChild(row);
+            });
+        }
+        
+        function navigateToNode(node) {
+            // 在树中找到对应节点并选中
+            const treeItems = document.querySelectorAll('.tree-item');
+            for (const treeItem of treeItems) {
+                const content = treeItem.querySelector('.tree-item-content');
+                const label = content.querySelector('.tree-label');
+                if (label && label.textContent === node.n) {
+                    // 检查是否是同一个节点（通过父节点路径）
+                    selectNode(node, content, treeItem);
+                    // 确保树节点可见
+                    content.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+                    break;
+                }
+            }
+        }
+        
+        function showFolderContents(node) {
+            currentItems = [];
+            
+            // 添加子文件夹
             if (node.c && node.c.length > 0) {
                 node.c.forEach(child => {
-                    const item = document.createElement('div');
-                    item.className = 'file-item';
-                    
-                    const name = document.createElement('div');
-                    name.className = 'col-name';
-                    
-                    const icon = document.createElement('span');
-                    icon.className = 'file-icon';
-                    icon.innerHTML = ICONS.folder;
-                    icon.querySelector('svg').style.fill = 'var(--icon-folder)';
-                    name.appendChild(icon);
-                    
-                    const label = document.createElement('span');
-                    label.textContent = child.n;
-                    name.appendChild(label);
-                    
-                    const size = document.createElement('div');
-                    size.className = 'col-size';
-                    size.textContent = '-';
-                    
-                    const date = document.createElement('div');
-                    date.className = 'col-date';
-                    date.textContent = '-';
-                    
-                    item.appendChild(name);
-                    item.appendChild(size);
-                    item.appendChild(date);
-                    list.appendChild(item);
+                    currentItems.push({
+                        n: child.n,
+                        s: 0,
+                        t: 0,
+                        isDir: true,
+                        nodeRef: child
+                    });
                 });
             }
             
-            // 再显示文件
+            // 添加文件
             if (node.f && node.f.length > 0) {
                 node.f.forEach(file => {
-                    const item = document.createElement('div');
-                    item.className = 'file-item';
-                    
-                    const name = document.createElement('div');
-                    name.className = 'col-name';
-                    
-                    const icon = document.createElement('span');
-                    icon.className = 'file-icon';
-                    icon.innerHTML = ICONS.file;
-                    name.appendChild(icon);
-                    
-                    const label = document.createElement('span');
-                    label.textContent = file.n;
-                    name.appendChild(label);
-                    
-                    const size = document.createElement('div');
-                    size.className = 'col-size';
-                    size.textContent = formatSize(file.s);
-                    
-                    const date = document.createElement('div');
-                    date.className = 'col-date';
-                    date.textContent = formatDate(file.t);
-                    
-                    item.appendChild(name);
-                    item.appendChild(size);
-                    item.appendChild(date);
-                    list.appendChild(item);
+                    currentItems.push({
+                        n: file.n,
+                        s: file.s,
+                        t: file.t,
+                        isDir: false
+                    });
                 });
             }
+            
+            renderCurrentItems();
+            updateFooterInfo();
         }
         
         function showFiles(files, highlight = '') {
@@ -873,63 +1051,117 @@ class HtmlExporter:
             });
         }
         
-        // Search
-        let searchTimeout;
+        // Search state
+        let isShowingSearchResults = false;
+        let nodeBeforeSearch = null;
         
         function search(keyword) {
-            clearTimeout(searchTimeout);
-            searchTimeout = setTimeout(() => {
-                if (!keyword) {
-                    const f = DATA.metadata.totalFiles.toLocaleString();
-                    const d = DATA.metadata.totalFolders ? DATA.metadata.totalFolders.toLocaleString() : '0';
-                    document.getElementById('footer').textContent = 
-                        `共 ${f} 个文件、${d} 个文件夹 · 生成于 ${DATA.metadata.generated}`;
-                    showFiles([]);
-                    return;
+            if (!keyword) {
+                return;
+            }
+            
+            // 记住搜索前的节点
+            if (!isShowingSearchResults && currentNode) {
+                nodeBeforeSearch = currentNode;
+            }
+            
+            isShowingSearchResults = true;
+            
+            const results = [];
+            const kw = keyword.toLowerCase();
+            
+            function searchNode(node, path) {
+                // 搜索文件夹名称
+                if (node.n.toLowerCase().includes(kw)) {
+                    results.push({n: node.n, isDir: true, path: path});
                 }
-                
-                const results = [];
-                const kw = keyword.toLowerCase();
-                
-                function searchNode(node, path) {
-                    // 搜索文件夹名称
-                    if (node.n.toLowerCase().includes(kw)) {
-                        results.push({n: node.n, isDir: true, path: path});
-                    }
-                    // 搜索文件
-                    if (node.f) {
-                        node.f.forEach(file => {
-                            if (file.n.toLowerCase().includes(kw)) {
-                                results.push({...file, path: path});
-                            }
-                        });
-                    }
-                    // 递归搜索子目录
-                    if (node.c) {
-                        const newPath = path ? path + '\\\\' + node.n : node.n;
-                        node.c.forEach(child => searchNode(child, newPath));
-                    }
+                // 搜索文件
+                if (node.f) {
+                    node.f.forEach(file => {
+                        if (file.n.toLowerCase().includes(kw)) {
+                            results.push({...file, path: path});
+                        }
+                    });
                 }
-                
-                DATA.tree.forEach(node => searchNode(node, ''));
-                const displayResults = results.slice(0, 1000);
-                showSearchResults(displayResults, keyword);
-                
-                let footerText = `搜索 "${keyword}" - ${results.length} 个结果`;
-                if (results.length > 1000) {
-                    footerText += ` (显示前 1000 条)`;
+                // 递归搜索子目录
+                if (node.c) {
+                    const newPath = path ? path + '\\\\' + node.n : node.n;
+                    node.c.forEach(child => searchNode(child, newPath));
                 }
-                document.getElementById('footer').textContent = footerText;
-            }, 300);
+            }
+            
+            DATA.tree.forEach(node => searchNode(node, ''));
+            const displayResults = results.slice(0, 1000);
+            showSearchResults(displayResults, keyword);
+            
+            let footerText = `搜索 "${keyword}" - ${results.length} 个结果`;
+            if (results.length > 1000) {
+                footerText += ` (显示前 1000 条)`;
+            }
+            document.getElementById('footerLeft').textContent = footerText;
+            document.getElementById('footerRight').textContent = '搜索结果';
         }
         
         function doSearch() {
-            search(document.getElementById('searchInput').value.trim());
+            const keyword = document.getElementById('searchInput').value.trim();
+            if (keyword) {
+                search(keyword);
+            }
         }
         
         function clearSearch() {
             document.getElementById('searchInput').value = '';
-            search('');
+            
+            // 如果当前正在显示搜索结果，返回搜索前的文件夹
+            if (isShowingSearchResults && nodeBeforeSearch) {
+                // 找到树中对应节点并选中
+                navigateToNode(nodeBeforeSearch);
+                nodeBeforeSearch = null;
+            } else if (currentNode) {
+                // 用户已选择新文件夹，更新 footer 显示当前文件夹信息
+                updateFooterInfo();
+            } else {
+                // 没有选择任何文件夹，显示默认信息
+                updateFooterDefault();
+            }
+        }
+        
+        // History navigation
+        let historyStack = [];
+        let historyIndex = -1;
+        let isNavigating = false;
+        
+        function pushHistoryState(state) {
+            if (isNavigating) return;
+            
+            // 如果当前不是栈顶，截断后面的历史
+            if (historyIndex < historyStack.length - 1) {
+                historyStack = historyStack.slice(0, historyIndex + 1);
+            }
+            historyStack.push(state);
+            historyIndex = historyStack.length - 1;
+        }
+        
+        function goBack() {
+            if (historyIndex > 0) {
+                historyIndex--;
+                navigateToState(historyStack[historyIndex]);
+            }
+        }
+        
+        function goForward() {
+            if (historyIndex < historyStack.length - 1) {
+                historyIndex++;
+                navigateToState(historyStack[historyIndex]);
+            }
+        }
+        
+        function navigateToState(state) {
+            isNavigating = true;
+            if (state.type === 'folder' && state.node) {
+                navigateToNode(state.node);
+            }
+            isNavigating = false;
         }
         
         // Init
@@ -938,15 +1170,19 @@ class HtmlExporter:
             
             if (typeof DATA !== 'undefined') {
                 buildTree(DATA.tree, document.getElementById('treeContainer'));
+                
+                // 默认展开根目录一级
+                document.querySelectorAll('#treeContainer > .tree-item').forEach(item => {
+                    item.classList.add('expanded');
+                });
+                
                 const f = DATA.metadata.totalFiles.toLocaleString();
                 const d = DATA.metadata.totalFolders ? DATA.metadata.totalFolders.toLocaleString() : '0';
-                document.getElementById('footer').textContent = 
+                document.getElementById('footerLeft').textContent = 
                     `共 ${f} 个文件、${d} 个文件夹 · 生成于 ${DATA.metadata.generated}`;
             }
             
-            document.getElementById('searchInput').addEventListener('input', (e) => {
-                search(e.target.value.trim());
-            });
+
             
             document.getElementById('searchInput').addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') doSearch();
@@ -955,6 +1191,33 @@ class HtmlExporter:
             document.getElementById('searchBtn').addEventListener('click', doSearch);
             document.getElementById('clearBtn').addEventListener('click', clearSearch);
             document.getElementById('themeBtn').addEventListener('click', toggleThemeDropdown);
+            
+            // 鼠标侧键前进后退
+            window.addEventListener('mouseup', (e) => {
+                if (e.button === 3) { // 后退键
+                    e.preventDefault();
+                    goBack();
+                } else if (e.button === 4) { // 前进键
+                    e.preventDefault();
+                    goForward();
+                }
+            });
+            
+            // 键盘前进后退 (Alt+Left/Right)
+            window.addEventListener('keydown', (e) => {
+                if (e.altKey && e.key === 'ArrowLeft') {
+                    e.preventDefault();
+                    goBack();
+                } else if (e.altKey && e.key === 'ArrowRight') {
+                    e.preventDefault();
+                    goForward();
+                }
+            });
+            
+            // 排序事件
+            document.querySelectorAll('.file-list-header > div[data-sort]').forEach(el => {
+                el.addEventListener('click', () => handleSort(el.dataset.sort));
+            });
             
             document.querySelectorAll('.theme-option').forEach(opt => {
                 opt.addEventListener('click', () => setTheme(opt.dataset.theme));
