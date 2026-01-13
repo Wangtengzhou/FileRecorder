@@ -175,6 +175,63 @@ class DatabaseManager:
             ))
             return cursor.lastrowid
     
+    def add_or_update_file(self, filepath: str, filename: str, size: int, 
+                           extension: str, media_type: str = None, 
+                           title: str = None, year: int = None) -> int:
+        """
+        添加或更新文件记录（用于 AI 整理功能）
+        
+        Args:
+            filepath: 完整文件路径
+            filename: 文件名
+            size: 文件大小
+            extension: 扩展名
+            media_type: 媒体类型
+            title: 标题
+            year: 年份
+            
+        Returns:
+            记录ID
+        """
+        from pathlib import Path
+        from datetime import datetime
+        
+        parent_folder = str(Path(filepath).parent)
+        
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # 获取或创建文件夹ID
+            folder_id = self._get_or_create_folder_id(cursor, parent_folder)
+            
+            # 检查是否已存在
+            cursor.execute("""
+                SELECT id FROM files WHERE folder_id = ? AND filename = ?
+            """, (folder_id, filename))
+            row = cursor.fetchone()
+            
+            now = datetime.now().isoformat()
+            
+            if row:
+                # 更新
+                cursor.execute("""
+                    UPDATE files SET 
+                        size_bytes = ?, 
+                        ai_category = ?,
+                        ai_tags = ?,
+                        scan_time = ?
+                    WHERE id = ?
+                """, (size, media_type, title, now, row[0]))
+                return row[0]
+            else:
+                # 插入
+                cursor.execute("""
+                    INSERT INTO files 
+                    (filename, extension, folder_id, size_bytes, scan_time, is_dir, ai_category, ai_tags)
+                    VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+                """, (filename, extension, folder_id, size, now, media_type, title))
+                return cursor.lastrowid
+    
     def batch_insert(self, files: list[dict]) -> int:
         """
         批量插入文件记录
@@ -452,54 +509,68 @@ class DatabaseManager:
     def get_folder_contents(self, folder_path: str, limit: int = 500, offset: int = 0) -> dict:
         """获取指定目录的内容（直接子目录和文件）"""
         folder_path = folder_path.replace('/', '\\').rstrip('\\')
-        folder_lower = folder_path.lower()
-        prefix = folder_lower + '\\'
+        # 注意：SQLite LOWER() 对非 ASCII 字符无效，使用精确匹配
+        prefix = folder_path + '\\'
         prefix_len = len(prefix)
         
         with self._get_connection() as conn:
             cursor = conn.cursor()
             
-            # 获取当前目录的folder_id
-            cursor.execute("SELECT id FROM folders WHERE LOWER(path) = ?", (folder_lower,))
+            # 获取当前目录的folder_id（精确匹配，但允许大小写差异）
+            # 使用 COLLATE NOCASE 确保 Windows 路径不区分大小写
+            cursor.execute("SELECT id FROM folders WHERE path = ? COLLATE NOCASE", (folder_path,))
             row = cursor.fetchone()
             current_folder_id = row['id'] if row else None
             
             # 获取直接子目录（优化：只查询第一级子目录）
-            # 使用SUBSTR和INSTR筛选只有一级深度的路径
+            # 使用 COLLATE NOCASE 进行大小写不敏感比较（对非ASCII字符也有效）
             cursor.execute("""
                 SELECT DISTINCT 
                     SUBSTR(path, ?) as remaining,
                     path
                 FROM folders 
-                WHERE LOWER(path) LIKE ? 
-                  AND LOWER(path) != ?
-                  AND INSTR(SUBSTR(LOWER(path), ?), '\\') = 0
-            """, (prefix_len + 1, prefix + '%', folder_lower, prefix_len + 1))
+                WHERE path LIKE ? ESCAPE '\\'
+                  AND path COLLATE NOCASE != ?
+                  AND INSTR(SUBSTR(path, ?), '\\') = 0
+            """, (prefix_len + 1, prefix.replace('\\', '\\\\') + '%', folder_path, prefix_len + 1))
             
-            subdirs_direct = []
+            # 按文件名（忽略大小写）分组去重
+            dirs_by_name = {}
             for row in cursor.fetchall():
                 first_part = row['remaining'].split('\\')[0] if row['remaining'] else ''
                 if first_part:
-                    subdirs_direct.append({
+                    name_key = first_part.lower()
+                    if name_key not in dirs_by_name:
+                        dirs_by_name[name_key] = []
+                    
+                    dirs_by_name[name_key].append({
                         'filename': first_part,
                         'full_path': folder_path + '\\' + first_part,
                         'is_dir': 1,
                     })
             
-            # 为子目录批量获取计数（避免N+1查询）
-            if subdirs_direct:
-                # 收集所有子目录路径
-                subdir_paths = [subdir['full_path'].lower() for subdir in subdirs_direct]
-                
-                # 批量查询folder_id
-                placeholders = ','.join('?' * len(subdir_paths))
+            subdirs_direct = []
+            all_variant_paths = []
+            
+            for variants in dirs_by_name.values():
+                # 选取每一组的第一个作为代表
+                rep = variants[0]
+                # 记录该组所有变体的路径，以便后续汇总统计
+                rep['_all_paths'] = [v['full_path'] for v in variants]
+                all_variant_paths.extend(rep['_all_paths'])
+                subdirs_direct.append(rep)
+            
+            # 为子目录批量获取计数（汇总所有变体）
+            if all_variant_paths:
+                # 批量查询所有变体的 folder_id
+                placeholders = ','.join('?' * len(all_variant_paths))
                 cursor.execute(f"""
-                    SELECT id, LOWER(path) as path_lower FROM folders 
-                    WHERE LOWER(path) IN ({placeholders})
-                """, subdir_paths)
-                path_to_id = {row['path_lower']: row['id'] for row in cursor.fetchall()}
+                    SELECT id, path FROM folders 
+                    WHERE path IN ({placeholders})
+                """, all_variant_paths)
+                path_to_id = {row['path']: row['id'] for row in cursor.fetchall()}
                 
-                # 批量查询每个folder_id下的文件数
+                # 批量查询文件数
                 folder_ids = list(path_to_id.values())
                 if folder_ids:
                     placeholders = ','.join('?' * len(folder_ids))
@@ -512,11 +583,17 @@ class DatabaseManager:
                 else:
                     id_to_count = {}
                 
-                # 赋值file_count
+                # 汇总赋值
                 for subdir in subdirs_direct:
-                    subdir_lower = subdir['full_path'].lower()
-                    folder_id = path_to_id.get(subdir_lower)
-                    subdir['file_count'] = id_to_count.get(folder_id, 0) if folder_id else 0
+                    total_count = 0
+                    for path in subdir.get('_all_paths', []):
+                        fid = path_to_id.get(path)
+                        if fid:
+                            total_count += id_to_count.get(fid, 0)
+                    subdir['file_count'] = total_count
+                    # 清理临时字段
+                    if '_all_paths' in subdir:
+                        del subdir['_all_paths']
             
             subdirs_direct.sort(key=lambda x: x['filename'].lower())
             
@@ -550,6 +627,18 @@ class DatabaseManager:
                 'has_more': has_more,
                 'total': total_files
             }
+    
+    def get_file_count_in_folder(self, folder_path: str) -> int:
+        """获取指定目录下的直接文件数量"""
+        folder_path = folder_path.replace('/', '\\').rstrip('\\')
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT COUNT(*) FROM files f
+                JOIN folders fo ON f.folder_id = fo.id
+                WHERE fo.path = ? AND (f.is_dir IS NULL OR f.is_dir = 0)
+            """, (folder_path,))
+            return cursor.fetchone()[0]
     
     # ========== 扫描错误管理 ==========
     

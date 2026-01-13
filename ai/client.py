@@ -159,7 +159,9 @@ class AIClient:
                 method="POST"
             )
             
-            with urllib.request.urlopen(req, timeout=30) as response:
+            # 从配置文件读取超时时间
+            timeout = config.get("ai", "timeout", default=60)
+            with urllib.request.urlopen(req, timeout=timeout) as response:
                 result = json.loads(response.read().decode("utf-8"))
                 return result["choices"][0]["message"]["content"]
                 

@@ -5,7 +5,10 @@
     "ai": {
         "api_key": "",
         "base_url": "",
-        "model": "gpt-4o-mini"
+        "model": "gpt-4o-mini",
+        "tpm_limit": 60000,
+        "rpm_limit": 60,
+        "timeout": 60
     },
     "scanner": {
         "timeout_seconds": 5,

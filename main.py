@@ -31,6 +31,14 @@ def main():
     app.setApplicationDisplayName("FileRecorder - 智能文件索引助手")
     app.setOrganizationName("FileRecorder")
     
+    # 修复 Fusion 风格复选框蓝色背景问题
+    app.setStyleSheet("""
+        QCheckBox::indicator:unchecked {
+            background-color: transparent;
+            border: 1px solid #888888;
+        }
+    """)
+    
     # 创建主窗口
     window = MainWindow()
     window.show()

@@ -95,6 +95,29 @@ class FileScanner(QObject):
         """检查是否为网络路径"""
         return path.startswith('\\\\') or '://' in path
     
+    def _get_long_path(self, path: str) -> str:
+        """获取 Windows 长路径格式（解决 260 字符限制）"""
+        path = str(path)
+        if path.startswith('\\\\?\\') or path.startswith('\\\\?\\UNC\\'):
+            return path
+        if path.startswith('\\\\'):
+            # UNC 路径: \\server\share -> \\?\UNC\server\share
+            return '\\\\?\\UNC\\' + path[2:]
+        else:
+            # 本地路径: C:\path -> \\?\C:\path
+            return '\\\\?\\' + path
+    
+    def _restore_original_path(self, path: str) -> str:
+        """将长路径格式还原为原始格式（用于存储到数据库）"""
+        path = str(path)
+        if path.startswith('\\\\?\\UNC\\'):
+            # \\?\UNC\server\share -> \\server\share
+            return '\\\\' + path[8:]
+        elif path.startswith('\\\\?\\'):
+            # \\?\C:\path -> C:\path
+            return path[4:]
+        return path
+    
     def _get_file_info(self, file_path: Path, scan_source: str) -> Optional[dict]:
         """
         获取文件信息
@@ -107,12 +130,19 @@ class FileScanner(QObject):
             文件信息字典，失败返回None
         """
         try:
-            stat = file_path.stat()
+            # 使用长路径格式避免 Windows 260 字符限制
+            long_path = self._get_long_path(str(file_path))
+            stat = os.stat(long_path)
+            
+            # 存储时使用原始路径格式（不含 \\?\ 前缀）
+            original_path = self._restore_original_path(str(file_path))
+            original_parent = self._restore_original_path(str(file_path.parent))
+            
             return {
                 'filename': file_path.name,
                 'extension': file_path.suffix.lower().lstrip('.') if file_path.suffix else '',
-                'full_path': str(file_path),
-                'parent_folder': str(file_path.parent),
+                'full_path': original_path,
+                'parent_folder': original_parent,
                 'size_bytes': stat.st_size,
                 'ctime': stat.st_ctime,
                 'mtime': stat.st_mtime,
@@ -148,12 +178,19 @@ class FileScanner(QObject):
             目录信息字典，失败返回None
         """
         try:
-            stat = dir_path.stat()
+            # 使用长路径格式避免 Windows 260 字符限制
+            long_path = self._get_long_path(str(dir_path))
+            stat = os.stat(long_path)
+            
+            # 存储时使用原始路径格式（不含 \\?\ 前缀）
+            original_path = self._restore_original_path(str(dir_path))
+            original_parent = self._restore_original_path(str(dir_path.parent))
+            
             return {
                 'filename': dir_path.name,
                 'extension': '',
-                'full_path': str(dir_path),
-                'parent_folder': str(dir_path.parent),
+                'full_path': original_path,
+                'parent_folder': original_parent,
                 'size_bytes': 0,
                 'ctime': stat.st_ctime,
                 'mtime': stat.st_mtime,
@@ -207,13 +244,22 @@ class FileScanner(QObject):
                 scanned_count += 1
                 self.progress.emit(scanned_count, 0, str(root_path))
             
-            # 使用 os.walk 递归遍历
-            for dirpath, dirnames, filenames in os.walk(path):
+            # 使用 os.walk 递归遍历（使用长路径格式避免 260 字符限制）
+            ignored_dirs = 0  # 统计忽略的目录数
+            ignored_files = 0  # 统计忽略的文件数
+            successful_files = 0  # 成功读取的文件数
+            failed_files = 0  # 读取失败的文件数
+            
+            # 对于长路径，使用长路径格式
+            walk_path = self._get_long_path(path)
+            for dirpath, dirnames, filenames in os.walk(walk_path):
                 if self._cancelled:
                     break
                 
                 # 过滤忽略的目录
+                original_count = len(dirnames)
                 dirnames[:] = [d for d in dirnames if not self._should_ignore(d)]
+                ignored_dirs += original_count - len(dirnames)
                 
                 # 记录当前目录下的子目录
                 for dirname in dirnames:
@@ -261,8 +307,10 @@ class FileScanner(QObject):
                         self._add_to_batch(file_info, files_found)
                         total_size += file_info.get('size_bytes', 0)
                         self.file_found.emit(file_info)
+                        successful_files += 1
                     else:
                         errors.append({'path': str(file_path), 'error': '无法读取文件信息'})
+                        failed_files += 1
                     
                     # 检查是否需要写入批次
                     total_inserted += self._flush_batch()
@@ -273,6 +321,9 @@ class FileScanner(QObject):
         
         # 写入剩余批次
         total_inserted += self._flush_batch(force=True)
+        
+        # 输出扫描统计日志
+        print(f"扫描统计: 成功 {successful_files}, 失败 {failed_files}, 忽略目录 {ignored_dirs}")
         
         # 风险防护：如果用户取消，可选择清理已写入数据
         # 注意：这里保留已扫描数据，用户可在界面中删除

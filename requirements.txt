@@ -5,4 +5,4 @@
 PySide6>=6.5.0
 
 # AI接口 - OpenAI兼容格式(支持DeepSeek/通义等)
-openai>=1.0.0
+# 项目目前使用原生 urllib 实现以减少依赖

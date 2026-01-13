@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QToolBar, QStatusBar, QLineEdit, QPushButton,
     QTableView, QHeaderView, QFileDialog, QMessageBox,
     QProgressBar, QLabel, QSplitter, QTreeWidget, QTreeWidgetItem,
-    QMenu, QComboBox
+    QMenu, QComboBox, QApplication
 )
 
 from database.db_manager import DatabaseManager
@@ -170,6 +170,12 @@ class MainWindow(QMainWindow):
         self.path_label.linkActivated.connect(self._on_breadcrumb_click)
         nav_layout.addWidget(self.path_label, 1)
         
+        # 刷新按钮
+        self.refresh_btn = QPushButton("🔄 刷新")
+        self.refresh_btn.clicked.connect(self._refresh_data)
+        self.refresh_btn.setToolTip("刷新当前视图 (F5)")
+        nav_layout.addWidget(self.refresh_btn)
+        
         # 视图切换
         self.view_toggle_btn = QPushButton("📋 平铺视图")
         self.view_toggle_btn.clicked.connect(self._on_toggle_view)
@@ -187,6 +193,13 @@ class MainWindow(QMainWindow):
         self.folder_tree.itemClicked.connect(self._on_folder_clicked)
         self.folder_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.folder_tree.customContextMenuRequested.connect(self._show_folder_tree_menu)
+        # 增加行间距，提高可读性
+        self.folder_tree.setStyleSheet("""
+            QTreeWidget::item {
+                padding: 2px 0;
+                min-height: 20px;
+            }
+        """)
         splitter.addWidget(self.folder_tree)
         
         # 右侧文件浏览器
@@ -273,6 +286,12 @@ class MainWindow(QMainWindow):
         optimize_action.triggered.connect(self._on_optimize_db)
         toolbar.addAction(optimize_action)
         
+        # 清除索引
+        clear_action = QAction("🗑️ 清除", self)
+        clear_action.setToolTip("清除所有索引数据")
+        clear_action.triggered.connect(self._on_clear_index)
+        toolbar.addAction(clear_action)
+        
         toolbar.addSeparator()
         
         # 错误文件
@@ -324,35 +343,61 @@ class MainWindow(QMainWindow):
         """刷新数据显示
         
         Args:
-            navigate_to: 可选，刷新后要导航到的路径。如果不指定，导航到第一个索引目录。
+            navigate_to: 可选，刷新后要导航到的路径。如果不指定，保持当前位置。
         """
         # 确定要导航到的目录
-        if navigate_to:
+        # 注意：如果从 clicked 信号调用，navigate_to 可能是 bool 类型
+        if navigate_to and isinstance(navigate_to, str):
             target_path = navigate_to
         else:
-            # 获取第一个扫描源作为默认目录
-            folders = self.db.get_folder_tree()
-            target_path = folders[0] if folders else ""
+            # 保持当前位置，如果没有当前位置则导航到第一个扫描源
+            target_path = self.browser_model.get_current_path()
+            if not target_path:
+                folders = self.db.get_folder_tree()
+                target_path = folders[0] if folders else ""
         
-        # 导航到目标目录（browser_model会从数据库按需加载）
+        # 保存目录树展开状态
+        expanded_paths = self._get_expanded_paths()
+        
+        # 更新目录树
+        self._build_folder_tree()
+        
+        # 恢复目录树展开状态
+        self._restore_expanded_paths(expanded_paths)
+        
+        # 恢复选中状态（仅当路径可见时才选中，不强制展开）
+        if target_path:
+            self._select_tree_item(target_path, expand=False)
+        
+        # 清除缓存
+        self.browser_model.clear_cache()
+        
+         # 最后导航到目标目录，确保右侧视图与左侧同步
         if target_path:
             self.browser_model.navigate_to(target_path)
         else:
             self.browser_model.navigate_to("")
+            
+        # 强制更新右侧视图模型绑定，防止视图卡死
+        self.file_table.setModel(self.browser_model)
         
-        # 平铺模式的file_model按需加载（仅当切换到平铺模式时）
-        # self.file_model.set_data([])  # 延迟加载
+        # 平铺模式的file_model按需加载
+        # self.file_model.set_data([])
         
         self._update_nav_ui()
         
-        # 更新扩展名过滤器
+        # 平铺模式的file_model按需加载
+        # self.file_model.set_data([])
+        
+        self._update_nav_ui()
+        
+        # 更新扩展名过滤器 - 暂时阻塞信号以防止触发搜索逻辑重置视图
+        self.ext_filter.blockSignals(True)
         self.ext_filter.clear()
         self.ext_filter.addItem("所有类型", "")
         for ext, count in self.db.get_all_extensions()[:30]:  # 最多30个扩展名
             self.ext_filter.addItem(f".{ext} ({count})", ext)
-        
-        # 更新目录树
-        self._build_folder_tree()
+        self.ext_filter.blockSignals(False)
         
         # 更新统计
         self._update_stats()
@@ -496,10 +541,13 @@ class MainWindow(QMainWindow):
                 if full_subdir.lower() not in seen:
                     seen.add(full_subdir.lower())
                     # 检查是否有更深的子目录
-                    has_children = any(
+                    has_subdirs = any(
                         d.replace('/', '\\').lower().startswith(full_subdir.lower() + '\\')
                         for d in all_dirs if d
                     )
+                    # 检查是否有子文件（通过数据库查询）
+                    file_count = self.db.get_file_count_in_folder(full_subdir)
+                    has_children = has_subdirs or file_count > 0
                     subdirs.append({
                         'name': first_part,
                         'path': full_subdir,
@@ -542,6 +590,48 @@ class MainWindow(QMainWindow):
         
         for i in range(self.folder_tree.topLevelItemCount()):
             restore_expanded(self.folder_tree.topLevelItem(i))
+            
+    def _select_tree_item(self, path: str, expand: bool = True):
+        """选中目录树中的指定路径（递归查找）
+        
+        Args:
+            path: 目标路径
+            expand: 是否强制展开父节点以显示目标。False则仅在父节点已展开时继续查找。
+        """
+        path = path.replace('/', '\\').rstrip('\\').lower()
+        
+        def find_and_select(item):
+            item_path = item.data(0, Qt.UserRole)
+            if item_path:
+                item_path = item_path.replace('/', '\\').rstrip('\\').lower()
+                if item_path == path:
+                    self.folder_tree.setCurrentItem(item)
+                    # 确保可视
+                    self.folder_tree.scrollToItem(item)
+                    return True
+            
+            # 如果目标路径以当前项路径开头，则展开并继续查找
+            if path.startswith(item_path + '\\'):
+                # 如果不强制展开且当前未展开，则停止查找（尊重用户状态）
+                if not expand and not item.isExpanded():
+                    return False
+
+                # 确保已加载子节点
+                if not item.data(0, Qt.UserRole + 1):  # is_loaded
+                    self._on_tree_item_expanded(item)
+                
+                item.setExpanded(True)
+                # 处理异步加载或UI更新延迟，虽然 _on_tree_item_expanded 是同步的
+                QApplication.processEvents()
+                
+                for i in range(item.childCount()):
+                    if find_and_select(item.child(i)):
+                        return True
+            return False
+        
+        for i in range(self.folder_tree.topLevelItemCount()):
+            if find_and_select(self.folder_tree.topLevelItem(i)):
+                break
     
     # ========== 事件处理 ==========
     
@@ -1173,16 +1263,13 @@ class MainWindow(QMainWindow):
     
     @Slot()
     def _on_ai_organize(self):
-        """AI整理（Phase 3实现）"""
-        if not config.ai_configured:
-            QMessageBox.information(
-                self, "AI未配置",
-                "请先在设置中配置AI接口信息（API密钥和接口地址）"
-            )
-            self._on_settings()
-            return
+        """AI 媒体库整理"""
+        from ui.media_wizard import MediaWizardDialog
         
-        QMessageBox.information(self, "提示", "AI整理功能将在Phase 3实现")
+        dialog = MediaWizardDialog(self, self.db)
+        # 连接信号，扫描完成后刷新主窗口数据
+        dialog.scan_finished.connect(self._refresh_data)
+        dialog.exec_()
     
     @Slot()
     def _on_export_csv(self):
@@ -1378,6 +1465,52 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 self.progress_bar.setVisible(False)
                 QMessageBox.critical(self, "优化失败", f"优化过程出错: {e}")
+    
+    @Slot()
+    def _on_clear_index(self):
+        """清除所有索引数据"""
+        stats = self.db.get_stats()
+        if stats['total_files'] == 0:
+            QMessageBox.information(self, "提示", "数据库已经是空的")
+            return
+        
+        reply = QMessageBox.warning(
+            self, "确认清除",
+            f"确定要清除所有索引数据吗？\n\n"
+            f"当前共有 {stats['total_files']:,} 个文件记录。\n"
+            f"此操作不可撤销！",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            self.statusbar.showMessage("正在清除索引...")
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setRange(0, 0)
+            
+            from PySide6.QtWidgets import QApplication
+            QApplication.processEvents()
+            
+            try:
+                # 获取所有扫描源并逐个清除
+                sources = self.db.get_folder_tree()
+                for source in sources:
+                    self.db.clear_source(source)
+                
+                # 优化数据库回收空间
+                self.db.optimize_database()
+                
+                self.progress_bar.setVisible(False)
+                self.statusbar.showMessage("索引已清除", 5000)
+                
+                # 刷新界面
+                self._refresh_data()
+                self._update_stats()
+                
+                QMessageBox.information(self, "完成", "所有索引数据已清除")
+            except Exception as e:
+                self.progress_bar.setVisible(False)
+                QMessageBox.critical(self, "错误", f"清除失败: {e}")
     
     @Slot()
     def _on_backup(self):

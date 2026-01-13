@@ -86,6 +86,32 @@ class SettingsDialog(QDialog):
         
         ai_layout.addWidget(ai_group)
         
+        # API 限流设置
+        rate_group = QGroupBox("API 限流设置")
+        rate_form = QFormLayout(rate_group)
+        
+        self.tpm_spin = QSpinBox()
+        self.tpm_spin.setRange(1000, 1000000)
+        self.tpm_spin.setSingleStep(10000)
+        self.tpm_spin.setValue(60000)
+        self.tpm_spin.setToolTip("每分钟最大令牌数（TPM），根据 API 服务商限制设置")
+        rate_form.addRow("TPM 限制:", self.tpm_spin)
+        
+        self.rpm_spin = QSpinBox()
+        self.rpm_spin.setRange(1, 1000)
+        self.rpm_spin.setValue(60)
+        self.rpm_spin.setToolTip("每分钟最大请求数（RPM）")
+        rate_form.addRow("RPM 限制:", self.rpm_spin)
+        
+        self.api_timeout_spin = QSpinBox()
+        self.api_timeout_spin.setRange(10, 300)
+        self.api_timeout_spin.setValue(60)
+        self.api_timeout_spin.setSuffix(" 秒")
+        self.api_timeout_spin.setToolTip("API 请求超时时间")
+        rate_form.addRow("请求超时:", self.api_timeout_spin)
+        
+        ai_layout.addWidget(rate_group)
+        
         # 预览和说明文字
         self.preview_label = QLabel()
         self.preview_label.setStyleSheet("color: #0066cc; font-size: 11px;")
@@ -174,6 +200,9 @@ class SettingsDialog(QDialog):
         self.api_key_input.setText(config.get("ai", "api_key", default=""))
         self.base_url_input.setText(config.get("ai", "base_url", default=""))
         self.model_input.setText(config.get("ai", "model", default="gpt-4o-mini"))
+        self.tpm_spin.setValue(config.get("ai", "tpm_limit", default=60000))
+        self.rpm_spin.setValue(config.get("ai", "rpm_limit", default=60))
+        self.api_timeout_spin.setValue(config.get("ai", "timeout", default=60))
         
         # 扫描设置
         self.timeout_spin.setValue(config.get("scanner", "timeout_seconds", default=5))
@@ -191,6 +220,9 @@ class SettingsDialog(QDialog):
         config.set("ai", "api_key", value=self.api_key_input.text())
         config.set("ai", "base_url", value=self.base_url_input.text())
         config.set("ai", "model", value=self.model_input.text())
+        config.set("ai", "tpm_limit", value=self.tpm_spin.value())
+        config.set("ai", "rpm_limit", value=self.rpm_spin.value())
+        config.set("ai", "timeout", value=self.api_timeout_spin.value())
         
         # 扫描设置
         config.set("scanner", "timeout_seconds", value=self.timeout_spin.value())

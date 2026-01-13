@@ -18,8 +18,11 @@ class Config:
         # AI 接口配置 (默认为空，需用户在界面设置)
         "ai": {
             "api_key": "",
-            "base_url": "",  # 自定义接口地址，如 https://api.deepseek.com
-            "model": "gpt-4o-mini"
+            "base_url": "",      # 自定义接口地址，如 https://api.deepseek.com
+            "model": "gpt-4o-mini",
+            "tpm_limit": 60000,   # 每分钟最大令牌数
+            "rpm_limit": 60,      # 每分钟最大请求数
+            "timeout": 60         # API 请求超时(秒)
         },
         # 扫描配置
         "scanner": {
