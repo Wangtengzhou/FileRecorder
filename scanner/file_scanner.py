@@ -98,6 +98,9 @@ class FileScanner(QObject):
     def _get_long_path(self, path: str) -> str:
         """获取 Windows 长路径格式（解决 260 字符限制）"""
         path = str(path)
+        # 首先统一将正斜杠转换为反斜杠（处理 //synology/PT 格式）
+        path = path.replace('/', '\\')
+        
         if path.startswith('\\\\?\\') or path.startswith('\\\\?\\UNC\\'):
             return path
         if path.startswith('\\\\'):
@@ -252,7 +255,11 @@ class FileScanner(QObject):
             
             # 对于长路径，使用长路径格式
             walk_path = self._get_long_path(path)
+            print(f"DEBUG_SCAN: 开始遍历 walk_path='{walk_path}'")
+            walk_count = 0
             for dirpath, dirnames, filenames in os.walk(walk_path):
+                walk_count += 1
+                print(f"DEBUG_SCAN: [{walk_count}] dirpath='{dirpath}', subdirs={len(dirnames)}, files={len(filenames)}")
                 if self._cancelled:
                     break
                 
