@@ -3,13 +3,16 @@ FileRecorder 设置对话框
 """
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLineEdit, QPushButton, QTabWidget, QWidget,
-    QLabel, QGroupBox, QCheckBox, QSpinBox, QTextEdit
+    QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
+    QLineEdit, QPushButton, QTabWidget, QWidget, QScrollArea, QFrame,
+    QLabel, QGroupBox, QCheckBox, QSpinBox, QTextEdit, QSizePolicy
 )
 
 from config import config
 from ai.client import test_api_connection
+
+# 默认内置标签（用户可删除和恢复）
+DEFAULT_TAGS = ["电影", "电视剧", "动漫", "纪录片", "综艺", "NSFW", "其他"]
 
 
 class ApiTestThread(QThread):
@@ -86,6 +89,25 @@ class SettingsDialog(QDialog):
         
         ai_layout.addWidget(ai_group)
         
+        # AI 参数设置
+        param_group = QGroupBox("AI 参数设置")
+        param_form = QFormLayout(param_group)
+        
+        # Temperature
+        self.temperature_spin = QSpinBox()
+        self.temperature_spin.setRange(0, 20)  # 0-2.0，显示为整数（实际除以10）
+        self.temperature_spin.setValue(1)  # 默认 0.1
+        self.temperature_spin.setToolTip(
+            "Temperature 参数（0-20 对应 0.0-2.0）\n\n"
+            "• 0-2：非常确定，结果高度一致（推荐用于分类任务）\n"
+            "• 3-7：平衡模式\n"
+            "• 8-20：更有创造性，结果变化大\n\n"
+            "默认值：1（即 0.1），适合分类识别任务"
+        )
+        param_form.addRow("Temperature (×0.1):", self.temperature_spin)
+        
+        ai_layout.addWidget(param_group)
+        
         # API 限流设置
         rate_group = QGroupBox("API 限流设置")
         rate_form = QFormLayout(rate_group)
@@ -94,20 +116,49 @@ class SettingsDialog(QDialog):
         self.tpm_spin.setRange(1000, 1000000)
         self.tpm_spin.setSingleStep(10000)
         self.tpm_spin.setValue(60000)
-        self.tpm_spin.setToolTip("每分钟最大令牌数（TPM），根据 API 服务商限制设置")
+        self.tpm_spin.setToolTip(
+            "每分钟最大令牌数（Tokens Per Minute）\n\n"
+            "• OpenAI GPT-4o-mini: 200,000\n"
+            "• DeepSeek: 根据套餐不同\n"
+            "• 通义千问: 根据模型不同\n\n"
+            "设置过高可能导致 429 错误（速率限制）"
+        )
         rate_form.addRow("TPM 限制:", self.tpm_spin)
         
         self.rpm_spin = QSpinBox()
         self.rpm_spin.setRange(1, 1000)
         self.rpm_spin.setValue(60)
-        self.rpm_spin.setToolTip("每分钟最大请求数（RPM）")
+        self.rpm_spin.setToolTip(
+            "每分钟最大请求数（Requests Per Minute）\n\n"
+            "• 免费账户通常较低（3-20）\n"
+            "• 付费账户通常较高（60-500）\n\n"
+            "建议根据 API 服务商的限制设置"
+        )
         rate_form.addRow("RPM 限制:", self.rpm_spin)
+        
+        self.batch_delay_spin = QSpinBox()
+        self.batch_delay_spin.setRange(0, 10000)
+        self.batch_delay_spin.setSingleStep(100)
+        self.batch_delay_spin.setValue(500)
+        self.batch_delay_spin.setSuffix(" ms")
+        self.batch_delay_spin.setToolTip(
+            "每批次处理后的等待时间（毫秒）\n\n"
+            "• 0：无延迟（适合高配额账户）\n"
+            "• 500-1000：推荐值，避免速率限制\n"
+            "• 2000+：保守设置，适合免费账户\n\n"
+            "如果频繁遇到 429 错误，请增加此值"
+        )
+        rate_form.addRow("批次延迟:", self.batch_delay_spin)
         
         self.api_timeout_spin = QSpinBox()
         self.api_timeout_spin.setRange(10, 300)
         self.api_timeout_spin.setValue(60)
         self.api_timeout_spin.setSuffix(" 秒")
-        self.api_timeout_spin.setToolTip("API 请求超时时间")
+        self.api_timeout_spin.setToolTip(
+            "单次 API 请求的超时时间\n\n"
+            "• 30-60：推荐值\n"
+            "• 120+：适合大批量请求或网络较慢的情况"
+        )
         rate_form.addRow("请求超时:", self.api_timeout_spin)
         
         ai_layout.addWidget(rate_group)
@@ -200,8 +251,16 @@ class SettingsDialog(QDialog):
         self.api_key_input.setText(config.get("ai", "api_key", default=""))
         self.base_url_input.setText(config.get("ai", "base_url", default=""))
         self.model_input.setText(config.get("ai", "model", default="gpt-4o-mini"))
+        
+        # AI 参数
+        # temperature 存储为 0.1 这样的小数，UI 显示为 1（需要乘10）
+        temp_value = config.get("ai", "temperature", default=0.1)
+        self.temperature_spin.setValue(int(temp_value * 10))
+        
+        # 限流设置
         self.tpm_spin.setValue(config.get("ai", "tpm_limit", default=60000))
         self.rpm_spin.setValue(config.get("ai", "rpm_limit", default=60))
+        self.batch_delay_spin.setValue(config.get("ai", "batch_delay_ms", default=500))
         self.api_timeout_spin.setValue(config.get("ai", "timeout", default=60))
         
         # 扫描设置
@@ -220,8 +279,14 @@ class SettingsDialog(QDialog):
         config.set("ai", "api_key", value=self.api_key_input.text())
         config.set("ai", "base_url", value=self.base_url_input.text())
         config.set("ai", "model", value=self.model_input.text())
+        
+        # AI 参数（UI 显示为 1，存储为 0.1）
+        config.set("ai", "temperature", value=self.temperature_spin.value() / 10.0)
+        
+        # 限流设置
         config.set("ai", "tpm_limit", value=self.tpm_spin.value())
         config.set("ai", "rpm_limit", value=self.rpm_spin.value())
+        config.set("ai", "batch_delay_ms", value=self.batch_delay_spin.value())
         config.set("ai", "timeout", value=self.api_timeout_spin.value())
         
         # 扫描设置
@@ -301,3 +366,4 @@ class SettingsDialog(QDialog):
         base_url = base_url.rstrip("/")
         full_url = f"{base_url}/chat/completions"
         self.preview_label.setText(f"实际请求地址: {full_url}")
+

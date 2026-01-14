@@ -88,14 +88,14 @@ class ReportGenerator:
         Returns:
             Markdown 格式的报告
         """
-        # 分组
-        movie_groups = self._group_movies(media_list)
-        tv_groups = self._group_tv_shows(media_list)
-        anime_groups = self._group_anime(media_list)  # 动漫
-        documentary_list = [m for m in media_list if m.media_type == "documentary"]  # 纪录片
-        nsfw_standard = [m for m in media_list if m.media_type == "nsfw" and m.code]
-        nsfw_custom = [m for m in media_list if m.media_type == "nsfw" and not m.code]
-        others = [m for m in media_list if m.media_type in ("other", "unknown", None, "")]
+        # 过滤掉 skip=True 的文件（预告片、样片等）
+        media_list = [m for m in media_list if not getattr(m, 'skip', False)]
+        
+        # 动态按类型分组（支持任意用户自定义标签）
+        type_groups = defaultdict(list)
+        for m in media_list:
+            type_key = m.media_type or "other"
+            type_groups[type_key].append(m)
         
         # 统计
         hardlink_count = sum(1 for m in media_list if m.is_hardlink)
@@ -112,72 +112,58 @@ class ReportGenerator:
         
         # 统计概览
         lines.append("## 统计概览\n")
-        lines.append("| 类型 | 数量 | 文件数 | 大小 |")
-        lines.append("|------|------|--------|------|")
+        lines.append("| 类型 | 数量 | 大小 |")
+        lines.append("|------|------|------|")
         
-        # 动态生成统计表，只显示非零分类
-        stats_rows = []
-        
-        # 电影
-        movie_count = len(movie_groups)
-        movie_files = sum(g.file_count for g in movie_groups.values())
-        movie_size = sum(g.total_size for g in movie_groups.values())
-        if movie_count > 0:
-            stats_rows.append(f"| 电影 | {movie_count} 部 | {movie_files} 个 | {format_size(movie_size)} |")
-        
-        # 电视剧
-        tv_count = len(tv_groups)
-        tv_episodes = sum(sum(len(eps) for eps in g.seasons.values()) for g in tv_groups.values())
-        tv_size = sum(sum(e.size_bytes for eps in g.seasons.values() for e in eps if not e.is_hardlink) 
-                      for g in tv_groups.values())
-        if tv_count > 0:
-            stats_rows.append(f"| 电视剧 | {tv_count} 部 | {tv_episodes} 集 | {format_size(tv_size)} |")
-        
-        # 动漫
-        anime_count = len(anime_groups)
-        anime_files = sum(g.file_count for g in anime_groups.values())
-        anime_size = sum(g.total_size for g in anime_groups.values())
-        if anime_count > 0:
-            stats_rows.append(f"| 动漫 | {anime_count} 部 | {anime_files} 个 | {format_size(anime_size)} |")
-        
-        # 纪录片
-        documentary_count = len(documentary_list)
-        documentary_size = sum(m.size_bytes for m in documentary_list if not m.is_hardlink)
-        if documentary_count > 0:
-            stats_rows.append(f"| 纪录片 | {documentary_count} 部 | {documentary_count} 个 | {format_size(documentary_size)} |")
-        
-        # NSFW
-        nsfw_count = len(nsfw_standard) + len(nsfw_custom)
-        nsfw_size = sum(m.size_bytes for m in nsfw_standard + nsfw_custom if not m.is_hardlink)
-        if nsfw_count > 0:
-            stats_rows.append(f"| NSFW | {nsfw_count} 项 | {nsfw_count} 个 | {format_size(nsfw_size)} |")
-        
-        # 其他
-        other_count = len(others)
-        other_size = sum(m.size_bytes for m in others if not m.is_hardlink)
-        if other_count > 0:
-            stats_rows.append(f"| 其他 | {other_count} 项 | {other_count} 个 | {format_size(other_size)} |")
-        
-        lines.extend(stats_rows)
+        # 按类型动态生成统计，按文件数量降序排列
+        for type_name, files in sorted(type_groups.items(), key=lambda x: -len(x[1])):
+            file_count = len(files)
+            total_size = sum(m.size_bytes for m in files if not m.is_hardlink)
+            # 类型名首字母大写
+            display_name = type_name.upper() if type_name.lower() in ('nsfw', 'av', 'nsfe') else type_name.title()
+            lines.append(f"| {display_name} | {file_count} 个 | {format_size(total_size)} |")
         
         lines.append("")
         if hardlink_count > 0:
             lines.append(f"*检测到 {hardlink_count} 个硬链接文件*\n")
         lines.append("")
         
-        # 电影列表
-        if movie_groups:
-            lines.append("---\n")
-            lines.append("## 电影\n")
+        # 按类型分别输出详情
+        for type_name, files in sorted(type_groups.items(), key=lambda x: -len(x[1])):
+            if not files:
+                continue
             
-            for title, group in sorted(movie_groups.items(), key=lambda x: x[0]):
-                year_str = f" ({group.year})" if group.year else ""
-                lines.append(f"### {group.title}{year_str}\n")
+            # 类型标题
+            display_name = type_name.upper() if type_name.lower() in ('nsfw', 'av', 'nsfe') else type_name.title()
+            lines.append("---\n")
+            lines.append(f"## {display_name}\n")
+            
+            # 检查是否有编码（用于番号类型）
+            with_code = [m for m in files if m.code]
+            without_code = [m for m in files if not m.code]
+            
+            # 如果有编码的文件，分两组显示
+            if with_code:
+                lines.append("### 标准编码\n")
+                lines.append("| # | 编码 | 文件名 | 大小 | 格式 | 位置 |")
+                lines.append("|---|------|--------|------|------|------|")
                 
+                for i, info in enumerate(sorted(with_code, key=lambda x: x.code), 1):
+                    size = format_size(info.size_bytes)
+                    ext = info.extension.upper().lstrip('.') if info.extension else "-"
+                    folder = str(Path(info.filepath).parent).replace('\\', '/')
+                    
+                    lines.append(f"| {i} | {info.code} | {info.filename} | {size} | {ext} | {folder}/ |")
+                
+                lines.append("")
+            
+            if without_code:
+                if with_code:
+                    lines.append("### 无编码\n")
                 lines.append("| # | 文件名 | 大小 | 格式 | 分辨率 | 位置 | 备注 |")
                 lines.append("|---|--------|------|------|--------|------|------|")
                 
-                for i, info in enumerate(group.files, 1):
+                for i, info in enumerate(sorted(without_code, key=lambda x: x.filename), 1):
                     size = "-" if info.is_hardlink else format_size(info.size_bytes)
                     ext = info.extension.upper().lstrip('.') if info.extension else "-"
                     res = info.resolution or "-"
@@ -185,136 +171,32 @@ class ReportGenerator:
                     
                     note = ""
                     if info.is_hardlink:
-                        note = f"🔗 硬链接"
+                        note = "🔗 硬链接"
                     elif info.is_disc:
                         note = f"{info.disc_type}原盘"
                     elif info.hdr:
                         note = "HDR"
                     
+                    # 使用 title 或 filename
+                    display_title = info.title or info.filename
                     lines.append(f"| {i} | {info.filename} | {size} | {ext} | {res} | {folder}/ | {note} |")
                 
                 lines.append("")
-        
-        # 电视剧列表
-        if tv_groups:
-            lines.append("---\n")
-            lines.append("## 电视剧\n")
-            
-            for title, group in sorted(tv_groups.items(), key=lambda x: x[0]):
-                lines.append(f"### {group.title}\n")
-                
-                for season in sorted(group.seasons.keys()):
-                    episodes = group.seasons[season]
-                    ep_count = len(episodes)
-                    missing = group.get_missing_episodes(season)
-                    
-                    status = "✓" if not missing else f"⚠️ 缺 {', '.join(f'E{e:02d}' for e in missing)}"
-                    lines.append(f"**Season {season}** - {ep_count} 集 {status}\n")
-                    
-                    lines.append("| 集数 | 文件名 | 大小 | 格式 | 位置 |")
-                    lines.append("|------|--------|------|------|------|")
-                    
-                    for info in sorted(episodes, key=lambda x: x.episode or 0):
-                        ep_str = f"E{info.episode:02d}" if info.episode else "-"
-                        size = format_size(info.size_bytes)
-                        ext = info.extension.upper().lstrip('.') if info.extension else "-"
-                        folder = str(Path(info.filepath).parent).replace('\\', '/')
-                        
-                        lines.append(f"| {ep_str} | {info.filename} | {size} | {ext} | {folder}/ |")
-                    
-                    lines.append("")
-        
-        # 动漫列表
-        if anime_groups:
-            lines.append("---\n")
-            lines.append("## 动漫\n")
-            
-            for title, group in sorted(anime_groups.items(), key=lambda x: x[0]):
-                year_str = f" ({group.year})" if group.year else ""
-                lines.append(f"### {group.title}{year_str}\n")
-                
-                lines.append("| # | 文件名 | 大小 | 格式 | 分辨率 | 位置 | 备注 |")
-                lines.append("|---|--------|------|------|--------|------|------|")
-                
-                for i, info in enumerate(group.files, 1):
-                    size = "-" if info.is_hardlink else format_size(info.size_bytes)
-                    ext = info.extension.upper().lstrip('.') if info.extension else "-"
-                    res = info.resolution or "-"
-                    folder = str(Path(info.filepath).parent).replace('\\', '/')
-                    
-                    note = ""
-                    if info.is_hardlink:
-                        note = f"🔗 硬链接"
-                    elif info.is_disc:
-                        note = f"{info.disc_type}原盘"
-                    elif info.hdr:
-                        note = "HDR"
-                    
-                    lines.append(f"| {i} | {info.filename} | {size} | {ext} | {res} | {folder}/ | {note} |")
-                
-                lines.append("")
-        
-        # NSFW 列表
-        if nsfw_standard or nsfw_custom:
-            lines.append("---\n")
-            lines.append("## NSFW\n")
-            
-            if nsfw_standard:
-                lines.append("### 标准番号\n")
-                lines.append("| 番号 | 文件名 | 大小 | 格式 | 位置 |")
-                lines.append("|------|--------|------|------|------|")
-                
-                for info in sorted(nsfw_standard, key=lambda x: x.code):
-                    size = format_size(info.size_bytes)
-                    ext = info.extension.upper().lstrip('.') if info.extension else "-"
-                    folder = str(Path(info.filepath).parent).replace('\\', '/')
-                    
-                    lines.append(f"| {info.code} | {info.filename} | {size} | {ext} | {folder}/ |")
-                
-                lines.append("")
-            
-            if nsfw_custom:
-                lines.append("### 自定义命名\n")
-                lines.append("| 文件名 | 大小 | 格式 | 位置 |")
-                lines.append("|--------|------|------|------|")
-                
-                for info in sorted(nsfw_custom, key=lambda x: x.filename):
-                    size = format_size(info.size_bytes)
-                    ext = info.extension.upper().lstrip('.') if info.extension else "-"
-                    folder = str(Path(info.filepath).parent).replace('\\', '/')
-                    
-                    lines.append(f"| {info.filename} | {size} | {ext} | {folder}/ |")
-                
-                lines.append("")
-        
-        # 其他
-        if others:
-            lines.append("---\n")
-            lines.append("## 其他视频\n")
-            lines.append("| 文件名 | 大小 | 格式 | 位置 |")
-            lines.append("|--------|------|------|------|")
-            
-            for info in sorted(others, key=lambda x: x.filename):
-                size = format_size(info.size_bytes)
-                ext = info.extension.upper().lstrip('.') if info.extension else "-"
-                folder = str(Path(info.filepath).parent).replace('\\', '/')
-                
-                lines.append(f"| {info.filename} | {size} | {ext} | {folder}/ |")
-            
-            lines.append("")
         
         return "\n".join(lines)
     
     def _group_movies(self, media_list: list[MediaInfo]) -> dict[str, MediaGroup]:
-        """按电影分组"""
+        """按电影分组（标题+年份）"""
         groups = {}
         
         for info in media_list:
             if info.media_type != "movie":
                 continue
             
-            # 使用标题作为分组键
-            key = info.title.lower() if info.title else info.filename.lower()
+            # 使用标题+年份作为分组键，避免同名不同年份的电影被合并
+            title_key = info.title.lower() if info.title else info.filename.lower()
+            year_key = str(info.year) if info.year else ""
+            key = f"{title_key}|{year_key}"
             
             if key not in groups:
                 groups[key] = MediaGroup(info.title or info.filename, info.year, "movie")

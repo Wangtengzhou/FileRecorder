@@ -6,9 +6,10 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QListWidget, QListWidgetItem, QGroupBox, QCheckBox,
     QLineEdit, QProgressBar, QTextEdit, QFileDialog,
-    QSplitter, QWidget, QComboBox, QSpinBox, QMessageBox
+    QSplitter, QWidget, QComboBox, QSpinBox, QMessageBox,
+    QFrame, QLayout, QSizePolicy, QScrollArea
 )
-from PySide6.QtCore import Qt, Signal, QThread
+from PySide6.QtCore import Qt, Signal, QThread, QRect, QSize, QPoint
 from PySide6.QtGui import QFont
 from pathlib import Path
 from typing import Optional
@@ -19,6 +20,86 @@ from ai.classifier import MediaClassifier, BatchClassifier, ClassifyOptions
 from ai.report import ReportGenerator, ReportOptions
 from scanner.file_scanner import FileScanner
 from config import config
+
+# 默认标签列表
+DEFAULT_TAGS = ["电影", "电视剧", "动漫", "纪录片", "综艺", "NSFW", "其他"]
+
+
+class FlowLayout(QLayout):
+    """流式布局 - 自动换行"""
+    
+    def __init__(self, parent=None, margin=0, spacing=6):
+        super().__init__(parent)
+        self.setContentsMargins(margin, margin, margin, margin)
+        self._spacing = spacing
+        self._items = []
+    
+    def addItem(self, item):
+        self._items.append(item)
+    
+    def spacing(self):
+        return self._spacing
+    
+    def count(self):
+        return len(self._items)
+    
+    def itemAt(self, index):
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+    
+    def takeAt(self, index):
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+    
+    def hasHeightForWidth(self):
+        return True
+    
+    def heightForWidth(self, width):
+        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+    
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+    
+    def sizeHint(self):
+        return self.minimumSize()
+    
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        size += QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
+        return size
+    
+    def _do_layout(self, rect, test_only):
+        margins = self.contentsMargins()
+        effective_rect = rect.adjusted(margins.left(), margins.top(), -margins.right(), -margins.bottom())
+        x = effective_rect.x()
+        y = effective_rect.y()
+        line_height = 0
+        
+        for item in self._items:
+            widget = item.widget()
+            space_x = self._spacing
+            space_y = self._spacing
+            
+            next_x = x + item.sizeHint().width() + space_x
+            if next_x - space_x > effective_rect.right() and line_height > 0:
+                x = effective_rect.x()
+                y = y + line_height + space_y
+                next_x = x + item.sizeHint().width() + space_x
+                line_height = 0
+            
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), item.sizeHint()))
+            
+            x = next_x
+            line_height = max(line_height, item.sizeHint().height())
+        
+        return y + line_height - rect.y() + margins.bottom()
 
 
 class ScanWorker(QThread):
@@ -289,10 +370,14 @@ class MediaWizardDialog(QDialog):
         self.db = db_manager
         self.worker = None
         self.results = []
+        self._current_tags = []  # 当前标签列表
         
         self.setWindowTitle("媒体库整理向导")
         self.setMinimumSize(800, 600)
         self.setup_ui()
+        
+        # 初始化标签显示
+        self._load_tags()
     
     def setup_ui(self):
         layout = QVBoxLayout(self)
@@ -315,8 +400,14 @@ class MediaWizardDialog(QDialog):
         
         dir_btn_layout = QHBoxLayout()
         self.add_dir_btn = QPushButton("浏览添加...")
+        self.add_dir_btn.setAutoDefault(False)
+        self.add_dir_btn.setDefault(False)
         self.remove_dir_btn = QPushButton("移除")
+        self.remove_dir_btn.setAutoDefault(False)
+        self.remove_dir_btn.setDefault(False)
         self.add_indexed_btn = QPushButton("从索引选择...")
+        self.add_indexed_btn.setAutoDefault(False)
+        self.add_indexed_btn.setDefault(False)
         dir_btn_layout.addWidget(self.add_dir_btn)
         dir_btn_layout.addWidget(self.remove_dir_btn)
         dir_btn_layout.addWidget(self.add_indexed_btn)
@@ -372,6 +463,42 @@ class MediaWizardDialog(QDialog):
         self.ai_hint_edit.setPlaceholderText('可选，如"这是动漫"、"这是日剧"...')
         row2.addWidget(self.ai_hint_edit)
         ai_layout.addLayout(row2)
+        
+        # 标签管理区域
+        tags_label = QLabel("分类标签：")
+        ai_layout.addWidget(tags_label)
+        
+        # 标签容器（流式布局）
+        self.tags_widget = QWidget()
+        self.tags_flow = FlowLayout(self.tags_widget, margin=2, spacing=4)
+        self.tags_widget.setLayout(self.tags_flow)
+        self.tags_widget.setMinimumHeight(30)
+        ai_layout.addWidget(self.tags_widget)
+        
+        # 标签操作按钮
+        tags_btn_row = QHBoxLayout()
+        self.new_tag_input = QLineEdit()
+        self.new_tag_input.setPlaceholderText("添加标签...")
+        self.new_tag_input.setMaximumWidth(120)
+        self.new_tag_input.returnPressed.connect(self._add_tag)
+        tags_btn_row.addWidget(self.new_tag_input)
+        
+        add_tag_btn = QPushButton("增加")
+        add_tag_btn.setFixedWidth(50)
+        add_tag_btn.setAutoDefault(False)  # 防止回车键触发其他按钮
+        add_tag_btn.setDefault(False)
+        add_tag_btn.setToolTip("添加标签")
+        add_tag_btn.clicked.connect(self._add_tag)
+        tags_btn_row.addWidget(add_tag_btn)
+        
+        restore_tags_btn = QPushButton("恢复默认")
+        restore_tags_btn.setFixedWidth(70)
+        restore_tags_btn.setAutoDefault(False)
+        restore_tags_btn.setDefault(False)
+        restore_tags_btn.clicked.connect(self._restore_default_tags)
+        tags_btn_row.addWidget(restore_tags_btn)
+        tags_btn_row.addStretch()
+        ai_layout.addLayout(tags_btn_row)
         
         config_layout.addWidget(ai_group)
         
@@ -432,8 +559,14 @@ class MediaWizardDialog(QDialog):
         btn_layout.addStretch()
         self.start_btn = QPushButton("开始整理")
         self.start_btn.setMinimumWidth(120)
+        self.start_btn.setAutoDefault(False)
+        self.start_btn.setDefault(False)
         self.cancel_btn = QPushButton("取消")
+        self.cancel_btn.setAutoDefault(False)
+        self.cancel_btn.setDefault(False)
         self.close_btn = QPushButton("关闭")
+        self.close_btn.setAutoDefault(False)
+        self.close_btn.setDefault(False)
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.cancel_btn)
         btn_layout.addWidget(self.close_btn)
@@ -554,13 +687,8 @@ class MediaWizardDialog(QDialog):
         self.start_btn.setEnabled(True)
         self.progress_bar.setValue(100)
         
-        # 动态统计各类型数量
+        # 动态统计各类型数量（支持任意自定义标签）
         type_counts = {}
-        type_names = {
-            "movie": "电影", "tv": "电视剧", "anime": "动漫",
-            "documentary": "纪录片", "variety": "综艺", "nsfw": "NSFW",
-            "other": "其他", "unknown": "未识别"
-        }
         for r in results:
             t = r.media_type or "unknown"
             type_counts[t] = type_counts.get(t, 0) + 1
@@ -568,8 +696,9 @@ class MediaWizardDialog(QDialog):
         msg = f"整理完成！共 {len(results)} 个文件\n"
         stats_parts = []
         for t, count in sorted(type_counts.items(), key=lambda x: -x[1]):
-            name = type_names.get(t, t)
-            stats_parts.append(f"{name}: {count}")
+            # 直接使用类型名，首字母大写处理
+            display_name = t.upper() if t.lower() in ('nsfw', 'av', 'nsfe') else t.title()
+            stats_parts.append(f"{display_name}: {count}")
         msg += ", ".join(stats_parts)
         
         if report_path:
@@ -589,3 +718,108 @@ class MediaWizardDialog(QDialog):
         self.status_label.setText("错误")
         self.log_text.append(f"错误: {error}")
         QMessageBox.critical(self, "错误", error)
+    
+    # ====================
+    # 标签管理方法
+    # ====================
+    
+    def _create_tag_chip(self, tag_name: str) -> QFrame:
+        """创建一个小胶囊样式的标签"""
+        chip = QFrame()
+        chip.setStyleSheet("""
+            QFrame {
+                background-color: #f0f0f0;
+                border: 1px solid #ddd;
+                border-radius: 10px;
+                padding: 0px;
+            }
+            QFrame:hover {
+                background-color: #e0e0e0;
+            }
+        """)
+        
+        layout = QHBoxLayout(chip)
+        layout.setContentsMargins(8, 2, 4, 2)
+        layout.setSpacing(2)
+        
+        # 标签文字
+        label = QLabel(tag_name)
+        label.setStyleSheet("font-size: 11px; color: #333; border: none; background: transparent;")
+        layout.addWidget(label)
+        
+        # 删除按钮
+        del_btn = QPushButton("×")
+        del_btn.setFixedSize(14, 14)
+        del_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #888;
+                border: none;
+                font-size: 12px;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                color: #d32f2f;
+            }
+        """)
+        del_btn.clicked.connect(lambda: self._remove_tag(tag_name))
+        layout.addWidget(del_btn)
+        
+        return chip
+    
+    def _load_tags(self):
+        """从配置加载标签"""
+        tags = config.get("ai", "media_types", default=None)
+        if tags is None:
+            self._current_tags = DEFAULT_TAGS.copy()
+        else:
+            self._current_tags = list(tags)
+        self._refresh_tags_display()
+    
+    def _save_tags(self):
+        """保存标签到配置"""
+        config.set("ai", "media_types", value=self._current_tags)
+        config.save()
+    
+    def _refresh_tags_display(self):
+        """刷新标签显示"""
+        # 清空现有标签
+        while self.tags_flow.count():
+            item = self.tags_flow.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        # 添加标签胶囊
+        for tag in self._current_tags:
+            chip = self._create_tag_chip(tag)
+            self.tags_flow.addWidget(chip)
+        
+        self.tags_widget.updateGeometry()
+    
+    def _add_tag(self):
+        """添加新标签"""
+        tag_name = self.new_tag_input.text().strip()
+        if not tag_name:
+            return
+        
+        if tag_name in self._current_tags:
+            self.new_tag_input.clear()
+            return
+        
+        self._current_tags.append(tag_name)
+        self._save_tags()
+        self._refresh_tags_display()
+        self.new_tag_input.clear()
+    
+    def _remove_tag(self, tag_name: str):
+        """删除标签"""
+        if tag_name in self._current_tags:
+            self._current_tags.remove(tag_name)
+            self._save_tags()
+            self._refresh_tags_display()
+    
+    def _restore_default_tags(self):
+        """恢复默认标签"""
+        self._current_tags = DEFAULT_TAGS.copy()
+        self._save_tags()
+        self._refresh_tags_display()

@@ -19,8 +19,15 @@ VIDEO_EXTENSIONS = {
 # 蓝光/DVD 原盘标识目录
 DISC_FOLDERS = {'BDMV', 'VIDEO_TS', 'HVDVD_TS'}
 
-# 跳过的文件名关键词（预告片、样片等）
-SKIP_KEYWORDS = {'sample', 'trailer', 'preview', 'teaser', 'extra', 'bonus'}
+# 跳过的文件名关键词（预告片、样片等）- 保守扩展，避免误伤
+SKIP_KEYWORDS = {
+    # 现有
+    'sample', 'trailer', 'preview', 'teaser', 'extra', 'bonus',
+    # 新增（高置信度）
+    'making of', 'behind the scenes', 'deleted scene',
+    # 后缀模式
+    '-sample', '_sample', '.sample'
+}
 
 # 最小文件大小（MB），小于此值跳过
 MIN_FILE_SIZE_MB = 100
@@ -63,6 +70,8 @@ class MediaInfo:
     # 处理状态
     parsed: bool = False        # 预处理是否成功
     needs_ai: bool = False      # 是否需要 AI 处理
+    skip: bool = False          # 是否跳过（预告片、样片等）
+    needs_context: bool = False # 是否需要二次检测（结合文件夹名）
 
 
 class MediaParser:

@@ -27,6 +27,7 @@ class AIClient:
         self.api_key = api_key or config.get("ai", "api_key", default="")
         self.base_url = base_url or config.get("ai", "base_url", default="")
         self.model = model or config.get("ai", "model", default="gpt-4o-mini")
+        self.last_error = None  # 存储最后一次错误信息
         
         # 默认使用 OpenAI 地址
         if not self.base_url:
@@ -164,9 +165,32 @@ class AIClient:
             with urllib.request.urlopen(req, timeout=timeout) as response:
                 result = json.loads(response.read().decode("utf-8"))
                 return result["choices"][0]["message"]["content"]
-                
+        
+        except urllib.error.HTTPError as e:
+            error_msg = f"API 错误 HTTP {e.code}"
+            try:
+                error_body = e.read().decode("utf-8")
+                error_json = json.loads(error_body)
+                detail = error_json.get("error", {}).get("message", "")
+                if detail:
+                    error_msg = f"API 错误 HTTP {e.code}: {detail}"
+            except:
+                pass
+            print(f"❌ {error_msg}")
+            # 存储最后一次错误供外部读取
+            self.last_error = error_msg
+            return None
+            
+        except urllib.error.URLError as e:
+            error_msg = f"网络错误: {e.reason}"
+            print(f"❌ {error_msg}")
+            self.last_error = error_msg
+            return None
+            
         except Exception as e:
-            print(f"AI 请求失败: {e}")
+            error_msg = f"AI 请求失败: {e}"
+            print(f"❌ {error_msg}")
+            self.last_error = error_msg
             return None
 
 
