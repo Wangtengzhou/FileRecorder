@@ -625,13 +625,19 @@ class MainWindow(QMainWindow):
                 QApplication.processEvents()
                 
                 for i in range(item.childCount()):
-                    if find_and_select(item.child(i)):
+                    child = item.child(i)
+                    if child and find_and_select(child):
                         return True
             return False
         
-        for i in range(self.folder_tree.topLevelItemCount()):
-            if find_and_select(self.folder_tree.topLevelItem(i)):
-                break
+        try:
+            for i in range(self.folder_tree.topLevelItemCount()):
+                top_item = self.folder_tree.topLevelItem(i)
+                if top_item and find_and_select(top_item):
+                    break
+        except RuntimeError:
+            # Qt 对象可能在刷新过程中被删除，忽略此错误
+            pass
     
     # ========== 事件处理 ==========
     

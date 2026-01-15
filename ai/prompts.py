@@ -107,13 +107,49 @@ def get_system_preset() -> str:
     return config.get("ai", "system_preset", default="")
 
 
-def build_prompt(file_list: list[str], user_hint: str = "") -> list[dict]:
+def build_system_prompt(skip_trailers: bool = True) -> str:
+    """
+    构建系统提示词
+    
+    Args:
+        skip_trailers: 是否启用跳过预告片/样片规则
+    """
+    skip_rule = ""
+    if skip_trailers:
+        skip_rule = "4. **标记跳过**：仅限预告片(trailer)、样片(sample)、幕后花絮等设 skip=true\n"
+    
+    return f"""你是一个媒体文件名解析专家，协助用户整理个人媒体库。这是一个纯技术性的文件索引和分类任务。
+
+任务：从文件名中**提取元数据**用于分类归档，你只需要识别文件名模式和提取信息，不涉及内容本身。
+
+规则：
+1. **提取原名**：从文件名中识别影片/剧集的名称（中英文均可）
+2. **判断类型**：根据提供的标签列表进行分类
+3. **提取元数据**：年份、分辨率、来源、季/集（有就提取，没有留空）
+{skip_rule}5. **标记二次检测**：无法从文件名直接判断类型的内容设 needs_context=true
+
+编码提取规则（适用于带有产品编码的文件）：
+- **标准编码格式**（以字母开头的编码）：
+  - 常规：`ABC-123`（2-6个字母 + 短横 + 3-5位数字）或者`第一會所新片@SIS001@`（2-5个字母 + 3-5位数字，中间没短横，如`SIS001`）
+  - 特殊：`FC2-PPV-1234567` 格式
+  - 注意：纯数字格式不是标准编码
+  - 提取核心编码放入 code 字段
+- **无标准编码**：code 留空，设 needs_context=true
+
+电视剧/动漫规则：
+- 识别 S01E01 或 第X集 格式，返回 season 和 episode
+
+返回严格 JSON 格式，不要任何其他内容。"""
+
+
+def build_prompt(file_list: list[str], user_hint: str = "", skip_trailers: bool = True) -> list[dict]:
     """
     构建完整的 prompt 消息列表
     
     Args:
         file_list: 文件信息列表，每项格式 "序号. 文件名 (大小)"
         user_hint: 用户自定义提示
+        skip_trailers: 是否启用跳过预告片/样片规则
         
     Returns:
         messages 列表
@@ -135,15 +171,45 @@ def build_prompt(file_list: list[str], user_hint: str = "") -> list[dict]:
     # 获取用户配置的标签列表
     types_str = get_types_string()
     
-    # 填充模板
-    user_content = USER_PROMPT_TEMPLATE.format(
-        file_list=file_list_str,
-        user_hint=hint_section,
-        available_types=types_str
-    )
+    # 构建用户提示（根据是否跳过预告片调整）
+    skip_note = "- 预告片/样片设 skip=true，但带有编码的文件永远不要 skip" if skip_trailers else "- 所有文件都设 skip=false"
+    
+    user_content = f"""分析以下视频文件，返回 JSON：
+
+文件列表：
+{file_list_str}
+
+{hint_section}
+
+**可用的分类标签**：{types_str}
+
+返回格式（严格 JSON，不要其他内容）：
+{{
+  "results": [
+    {{
+      "index": 1,
+      "title": "从文件名提取的原名",
+      "year": 2024,
+      "type": "从上面的标签列表中选择",
+      "resolution": "4K",
+      "source": "BluRay",
+      "season": null,
+      "episode": null,
+      "code": null,
+      "skip": false,
+      "needs_context": false
+    }}
+  ]
+}}
+
+重要：
+- type 必须从上面的【可用标签】中选择，不要自己编造
+- 带有字母开头编码（如ABC-123）的文件：code 字段填入编码
+- 无法确定类型时：needs_context=true
+{skip_note}"""
     
     return [
-        {"role": "system", "content": SYSTEM_PROMPT_BASE},
+        {"role": "system", "content": build_system_prompt(skip_trailers)},
         {"role": "user", "content": user_content}
     ]
 

@@ -203,6 +203,8 @@ class FileBrowserModel(QAbstractTableModel):
                     'full_path': subdir.get('full_path', ''),
                     'is_dir': True,
                     'file_count': subdir.get('file_count', 0),
+                    'ai_category': subdir.get('ai_category', ''),
+                    'ai_tags': subdir.get('ai_tags', ''),
                 })
             
             # 添加文件

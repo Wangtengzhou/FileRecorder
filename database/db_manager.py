@@ -58,10 +58,22 @@ class DatabaseManager:
                 CREATE TABLE IF NOT EXISTS folders (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     path TEXT UNIQUE NOT NULL,
-                    scan_source_id INTEGER
+                    scan_source_id INTEGER,
+                    ai_category TEXT,
+                    ai_tags TEXT
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_folder_path ON folders(path)")
+            
+            # 为旧数据库添加新列（如果不存在）
+            try:
+                cursor.execute("ALTER TABLE folders ADD COLUMN ai_category TEXT")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+            try:
+                cursor.execute("ALTER TABLE folders ADD COLUMN ai_tags TEXT")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
             
             # 文件索引表（优化版：用folder_id替代重复的路径文本）
             cursor.execute("""
@@ -374,6 +386,52 @@ class DatabaseManager:
                 [(u.get('ai_category'), u.get('ai_tags'), u.get('id')) for u in updates]
             )
     
+    def update_folder_ai_tags(self, folder_path: str, ai_category: str, ai_tags: str = "") -> bool:
+        """
+        通过路径更新文件夹的 AI 标签（如果文件夹不存在则创建）
+        
+        Args:
+            folder_path: 文件夹路径
+            ai_category: AI 分类
+            ai_tags: AI 标签（可选）
+            
+        Returns:
+            是否更新成功
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # 标准化路径（去除尾部斜杠，统一为反斜杠）
+            normalized_path = folder_path.rstrip('/\\').replace('/', '\\')
+            
+            # 尝试用 LIKE 匹配（大小写不敏感）
+            cursor.execute("""
+                UPDATE folders SET ai_category = ?, ai_tags = ? 
+                WHERE path COLLATE NOCASE = ? OR path COLLATE NOCASE = ?
+            """, (ai_category, ai_tags, normalized_path, normalized_path.replace('\\', '/')))
+            
+            if cursor.rowcount > 0:
+                return True
+            
+            # 尝试用文件夹名末尾模糊匹配
+            folder_name = normalized_path.split('\\')[-1] if '\\' in normalized_path else normalized_path
+            cursor.execute("""
+                UPDATE folders SET ai_category = ?, ai_tags = ? 
+                WHERE path COLLATE NOCASE LIKE ?
+            """, (ai_category, ai_tags, f"%\\{folder_name}"))
+            
+            if cursor.rowcount > 0:
+                return True
+            
+            # 文件夹不存在，创建它
+            try:
+                cursor.execute("""
+                    INSERT INTO folders (path, ai_category, ai_tags) VALUES (?, ?, ?)
+                """, (normalized_path, ai_category, ai_tags))
+                return True
+            except Exception as e:
+                print(f"    创建文件夹记录失败: {e}")
+                return False
+    
     def get_all_extensions(self) -> list[tuple[str, int]]:
         """获取所有扩展名及其文件数量"""
         with self._get_connection() as conn:
@@ -527,7 +585,9 @@ class DatabaseManager:
             cursor.execute("""
                 SELECT DISTINCT 
                     SUBSTR(path, ?) as remaining,
-                    path
+                    path,
+                    ai_category,
+                    ai_tags
                 FROM folders 
                 WHERE path LIKE ? ESCAPE '\\'
                   AND path COLLATE NOCASE != ?
@@ -547,6 +607,8 @@ class DatabaseManager:
                         'filename': first_part,
                         'full_path': folder_path + '\\' + first_part,
                         'is_dir': 1,
+                        'ai_category': row['ai_category'] or '',
+                        'ai_tags': row['ai_tags'] or '',
                     })
             
             subdirs_direct = []

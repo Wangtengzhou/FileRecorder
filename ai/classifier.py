@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from config import config
 from ai.client import AIClient
 from ai.parser import MediaInfo, format_size
-from ai.prompts import build_prompt, build_context_prompt, SYSTEM_PROMPT_BASE
+from ai.prompts import build_prompt, build_context_prompt
 
 # Debug 开关 - 开发时设为 True，发布时设为 False
 DEBUG_CLASSIFIER = True
@@ -38,6 +38,8 @@ class ClassifyOptions:
     batch_size: int = 30
     # Debug 模式
     debug: bool = False
+    # 是否跳过预告片/样片
+    skip_trailers: bool = True
 
 
 class MediaClassifier:
@@ -66,7 +68,7 @@ class MediaClassifier:
             file_info.append(f"{i}. {info.filename} ({format_size(info.size_bytes)})")
         
         # 使用 prompts 模块构建消息
-        messages = build_prompt(file_info, options.hint)
+        messages = build_prompt(file_info, options.hint, options.skip_trailers)
         
         # 从配置读取 temperature（使用低温度和固定 seed 提高结果一致性）
         temperature = config.get("ai", "temperature", default=0.1)

@@ -266,6 +266,7 @@ class ScanWorker(QThread):
                             extension='.iso',
                             is_disc=True,
                             disc_type='ISO',
+                            file_id=(0, iso_f.get('id', 0)),  # 添加 file_id 以支持打标签
                             needs_ai=True  # 确保参与 AI 识别
                         )
                         all_media.append(info)
@@ -284,25 +285,15 @@ class ScanWorker(QThread):
                 self.finished.emit([], "")
                 return
             
-            # 2. 检测硬链接
-            if self.options.get('detect_hardlink', True):
-                self.progress.emit(25, 100, "检测硬链接...")
-                try:
-                    detector = HardlinkDetector()
-                    all_media = detector.detect_hardlinks(all_media)
-                    hardlink_count = sum(1 for m in all_media if m.is_hardlink)
-                    self.progress.emit(30, 100, f"  → 检测到 {hardlink_count} 个硬链接")
-                except Exception as e:
-                    self.progress.emit(30, 100, f"  ⚠️ 硬链接检测出错: {e}")
-            
-            # 3. AI 分类（强制所有文件）
+            # 2. AI 分类（强制所有文件）
             self.progress.emit(40, 100, f"AI 识别 {len(all_media)} 个文件...")
             
             try:
                 classifier = BatchClassifier()
                 options = ClassifyOptions(
                     hint=self.options.get('ai_hint', ''),
-                    batch_size=self.options.get('batch_size', 20)
+                    batch_size=self.options.get('batch_size', 20),
+                    skip_trailers=self.options.get('skip_trailers', True)
                 )
                 
                 def on_progress(current, total, msg):
@@ -333,17 +324,73 @@ class ScanWorker(QThread):
                 self.progress.emit(95, 100, f"更新 AI 分类结果... (共 {len(all_media)} 个文件)")
                 try:
                     updates = []
+                    skipped_no_id = 0
+                    skipped_no_type = 0
+                    skipped_skip = 0
                     for info in all_media:
-                        if info.media_type or info.title:
-                            updates.append({
-                                'id': info.file_id[1] if isinstance(info.file_id, tuple) else 0,
-                                'ai_category': info.media_type or '',
-                                'ai_tags': info.title or ''
-                            })
+                        # 跳过被标记为 skip 的文件（样片/预告片）
+                        if getattr(info, 'skip', False):
+                            skipped_skip += 1
+                            continue
+                        
+                        # 获取文件 ID
+                        if isinstance(info.file_id, tuple) and len(info.file_id) > 1:
+                            file_db_id = info.file_id[1]
+                        elif isinstance(info.file_id, int):
+                            file_db_id = info.file_id
+                        else:
+                            file_db_id = 0
+                        
+                        # 跳过无效 ID（BDMV 原盘没有数据库 ID）
+                        if file_db_id <= 0:
+                            skipped_no_id += 1
+                            continue
+                        
+                        # 跳过没有分类结果的文件
+                        if not info.media_type and not info.title:
+                            skipped_no_type += 1
+                            continue
+                        
+                        updates.append({
+                            'id': file_db_id,
+                            'ai_category': info.media_type or '',
+                            'ai_tags': info.title or ''
+                        })
                     
+                    # 更新普通文件的标签
                     if updates:
                         self.db.batch_update_ai_tags(updates)
-                        self.progress.emit(100, 100, f"  → 已更新 {len(updates)} 个文件的 AI 分类")
+                        msg = f"  → 已更新 {len(updates)} 个文件的 AI 分类"
+                        if skipped_no_id > 0:
+                            msg += f"（跳过 {skipped_no_id} 个 BDMV 原盘）"
+                        self.progress.emit(98, 100, msg)
+                    
+                    # 为 BDMV 原盘更新文件夹标签
+                    folder_updates = 0
+                    folder_attempts = 0
+                    for info in all_media:
+                        # 只处理 BDMV 原盘（is_disc=True 且 extension='.disc'）
+                        if getattr(info, 'is_disc', False) and info.extension == '.disc':
+                            folder_attempts += 1
+                            if info.media_type:
+                                print(f"  📂 尝试更新 BDMV 文件夹: {info.filepath} → {info.media_type}")
+                                success = self.db.update_folder_ai_tags(
+                                    info.filepath,
+                                    info.media_type,
+                                    info.title or ''
+                                )
+                                if success:
+                                    folder_updates += 1
+                                    print(f"    ✅ 更新成功")
+                                else:
+                                    print(f"    ❌ 未找到匹配的文件夹")
+                    
+                    if folder_updates > 0:
+                        self.progress.emit(100, 100, f"  → 已更新 {folder_updates} 个 BDMV 原盘文件夹的分类")
+                    elif folder_attempts > 0:
+                        self.progress.emit(100, 100, f"  ⚠️ 尝试更新 {folder_attempts} 个 BDMV，但未找到匹配的文件夹记录")
+                    elif skipped_no_id == 0 and len(updates) == 0:
+                        self.progress.emit(100, 100, f"  ⚠️ 没有可更新的文件（无分类: {skipped_no_type}）")
                 except Exception as e:
                     import traceback
                     self.progress.emit(100, 100, f"  ⚠️ 更新分类出错: {e}")
@@ -434,10 +481,7 @@ class MediaWizardDialog(QDialog):
         row2 = QHBoxLayout()
         self.detect_disc_cb = QCheckBox("识别蓝光/DVD原盘")
         self.detect_disc_cb.setChecked(True)
-        self.detect_hardlink_cb = QCheckBox("检测硬链接")
-        self.detect_hardlink_cb.setChecked(True)
         row2.addWidget(self.detect_disc_cb)
-        row2.addWidget(self.detect_hardlink_cb)
         row2.addStretch()
         scan_layout.addLayout(row2)
         
@@ -454,6 +498,14 @@ class MediaWizardDialog(QDialog):
         self.batch_size_spin.setValue(20)
         self.batch_size_spin.setToolTip("每次发送给 AI 的文件数量，建议 10-30")
         row1.addWidget(self.batch_size_spin)
+        row1.addSpacing(20)
+        self.skip_trailer_cb = QCheckBox("跳过预告片/样片")
+        self.skip_trailer_cb.setChecked(True)
+        self.skip_trailer_cb.setToolTip(
+            "启用后，AI 会自动识别并跳过预告片(trailer)、样片(sample)、花絮等非正片内容\n"
+            "这些文件不会出现在最终报告中"
+        )
+        row1.addWidget(self.skip_trailer_cb)
         row1.addStretch()
         ai_layout.addLayout(row1)
         
@@ -639,9 +691,9 @@ class MediaWizardDialog(QDialog):
         options = {
             'min_size_mb': self.min_size_spin.value() if self.skip_small_cb.isChecked() else 0,
             'detect_disc': self.detect_disc_cb.isChecked(),
-            'detect_hardlink': self.detect_hardlink_cb.isChecked(),
             'batch_size': self.batch_size_spin.value(),
             'ai_hint': self.ai_hint_edit.text().strip(),
+            'skip_trailers': self.skip_trailer_cb.isChecked(),
             'save_tags': self.save_tags_cb.isChecked(),
             'gen_report': self.gen_report_cb.isChecked(),
         }
@@ -689,7 +741,12 @@ class MediaWizardDialog(QDialog):
         
         # 动态统计各类型数量（支持任意自定义标签）
         type_counts = {}
+        skipped_count = 0
         for r in results:
+            # 跳过的文件单独统计
+            if getattr(r, 'skip', False):
+                skipped_count += 1
+                continue
             t = r.media_type or "unknown"
             type_counts[t] = type_counts.get(t, 0) + 1
         
@@ -699,6 +756,8 @@ class MediaWizardDialog(QDialog):
             # 直接使用类型名，首字母大写处理
             display_name = t.upper() if t.lower() in ('nsfw', 'av', 'nsfe') else t.title()
             stats_parts.append(f"{display_name}: {count}")
+        if skipped_count > 0:
+            stats_parts.append(f"跳过: {skipped_count}")
         msg += ", ".join(stats_parts)
         
         if report_path:
@@ -783,11 +842,16 @@ class MediaWizardDialog(QDialog):
     
     def _refresh_tags_display(self):
         """刷新标签显示"""
-        # 清空现有标签
+        # 清空现有标签 - 使用同步删除避免竞态条件
         while self.tags_flow.count():
             item = self.tags_flow.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            if item and item.widget():
+                widget = item.widget()
+                widget.setParent(None)  # 同步移除
+                widget.deleteLater()    # 延迟销毁
+        
+        # 确保布局更新
+        self.tags_flow.invalidate()
         
         # 添加标签胶囊
         for tag in self._current_tags:
@@ -795,6 +859,7 @@ class MediaWizardDialog(QDialog):
             self.tags_flow.addWidget(chip)
         
         self.tags_widget.updateGeometry()
+        self.tags_widget.update()
     
     def _add_tag(self):
         """添加新标签"""

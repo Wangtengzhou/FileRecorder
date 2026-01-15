@@ -228,6 +228,47 @@ class SettingsDialog(QDialog):
         ui_layout.addStretch()
         tabs.addTab(ui_tab, "界面")
         
+        # AI 提示词设置页
+        prompt_tab = QWidget()
+        prompt_layout = QVBoxLayout(prompt_tab)
+        
+        preset_group = QGroupBox("系统预设提示词")
+        preset_layout = QVBoxLayout(preset_group)
+        
+        preset_note = QLabel(
+            "此提示词会自动添加到每次 AI 识别请求中，无需每次手动输入。\n"
+            "可用于设置固定的分类规则或矫正规则。"
+        )
+        preset_note.setStyleSheet("color: gray; font-size: 11px;")
+        preset_note.setWordWrap(True)
+        preset_layout.addWidget(preset_note)
+        
+        self.system_preset_input = QTextEdit()
+        self.system_preset_input.setPlaceholderText(
+            "示例：\n"
+            "• 日本目录的都分类为 NSFW AV\n"
+            "• 中国目录的都分类为 NSFW 国产\n"
+            "• 4K 内容优先保留"
+        )
+        self.system_preset_input.setMaximumHeight(120)
+        preset_layout.addWidget(self.system_preset_input)
+        
+        prompt_layout.addWidget(preset_group)
+        
+        # 说明
+        prompt_help = QLabel(
+            "提示词层级说明：\n\n"
+            "1. 系统预设（本页配置）- 固定规则，每次自动添加\n"
+            "2. 用户临时提示（AI整理弹窗输入）- 临时规则，当次有效\n\n"
+            "两者会合并发送给 AI，系统预设优先级较高。"
+        )
+        prompt_help.setStyleSheet("color: #666; font-size: 11px;")
+        prompt_help.setWordWrap(True)
+        prompt_layout.addWidget(prompt_help)
+        
+        prompt_layout.addStretch()
+        tabs.addTab(prompt_tab, "AI提示词")
+        
         layout.addWidget(tabs)
         
         # 按钮
@@ -272,6 +313,9 @@ class SettingsDialog(QDialog):
         
         # 界面设置
         self.remember_size_check.setChecked(config.get("ui", "remember_window_size", default=True))
+        
+        # AI 提示词设置
+        self.system_preset_input.setPlainText(config.get("ai", "system_preset", default=""))
     
     def _save_settings(self):
         """保存设置"""
@@ -287,6 +331,9 @@ class SettingsDialog(QDialog):
         config.set("ai", "tpm_limit", value=self.tpm_spin.value())
         config.set("ai", "rpm_limit", value=self.rpm_spin.value())
         config.set("ai", "batch_delay_ms", value=self.batch_delay_spin.value())
+        
+        # AI 提示词设置
+        config.set("ai", "system_preset", value=self.system_preset_input.toPlainText())
         config.set("ai", "timeout", value=self.api_timeout_spin.value())
         
         # 扫描设置

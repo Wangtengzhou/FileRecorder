@@ -97,9 +97,6 @@ class ReportGenerator:
             type_key = m.media_type or "other"
             type_groups[type_key].append(m)
         
-        # 统计
-        hardlink_count = sum(1 for m in media_list if m.is_hardlink)
-        
         # 生成报告
         lines = []
         
@@ -118,14 +115,12 @@ class ReportGenerator:
         # 按类型动态生成统计，按文件数量降序排列
         for type_name, files in sorted(type_groups.items(), key=lambda x: -len(x[1])):
             file_count = len(files)
-            total_size = sum(m.size_bytes for m in files if not m.is_hardlink)
+            total_size = sum(m.size_bytes for m in files)
             # 类型名首字母大写
             display_name = type_name.upper() if type_name.lower() in ('nsfw', 'av', 'nsfe') else type_name.title()
             lines.append(f"| {display_name} | {file_count} 个 | {format_size(total_size)} |")
         
         lines.append("")
-        if hardlink_count > 0:
-            lines.append(f"*检测到 {hardlink_count} 个硬链接文件*\n")
         lines.append("")
         
         # 按类型分别输出详情
@@ -164,15 +159,13 @@ class ReportGenerator:
                 lines.append("|---|--------|------|------|--------|------|------|")
                 
                 for i, info in enumerate(sorted(without_code, key=lambda x: x.filename), 1):
-                    size = "-" if info.is_hardlink else format_size(info.size_bytes)
+                    size = format_size(info.size_bytes)
                     ext = info.extension.upper().lstrip('.') if info.extension else "-"
                     res = info.resolution or "-"
                     folder = str(Path(info.filepath).parent).replace('\\', '/')
                     
                     note = ""
-                    if info.is_hardlink:
-                        note = "🔗 硬链接"
-                    elif info.is_disc:
+                    if info.is_disc:
                         note = f"{info.disc_type}原盘"
                     elif info.hdr:
                         note = "HDR"
