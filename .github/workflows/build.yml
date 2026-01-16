@@ -34,7 +34,7 @@ jobs:
     
     - name: Build executable
       run: |
-        pyinstaller --noconfirm --onefile --windowed --name "FileRecorder" --icon "logo.ico" --add-data "logo.png;." main.py
+        pyinstaller --noconfirm FileRecorder.spec
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4

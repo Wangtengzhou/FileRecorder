@@ -4,5 +4,8 @@
 # GUI框架 - Qt官方Python绑定
 PySide6>=6.5.0
 
+# 文件系统监控 - 本地目录实时监控
+watchdog>=3.0.0
+
 # AI接口 - OpenAI兼容格式(支持DeepSeek/通义等)
 # 项目目前使用原生 urllib 实现以减少依赖
