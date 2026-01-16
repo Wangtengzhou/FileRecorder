@@ -30,15 +30,11 @@ Thumbs.db
 # Build artifacts
 build/
 dist/
-*.spec
 
 # Logs
 *.log
 
-# Assets to exclude
-原图.png
-
-# Development files (not for release)
+# Private development files (不开源)
 原图.png
 开发规划书.md
 RELEASE_GUIDE.md
