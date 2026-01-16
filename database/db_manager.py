@@ -58,12 +58,15 @@ class DatabaseManager:
                 CREATE TABLE IF NOT EXISTS folders (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     path TEXT UNIQUE NOT NULL,
+                    parent_id INTEGER,
                     scan_source_id INTEGER,
                     ai_category TEXT,
-                    ai_tags TEXT
+                    ai_tags TEXT,
+                    FOREIGN KEY (parent_id) REFERENCES folders(id)
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_folder_path ON folders(path)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_folder_parent ON folders(parent_id)")
             
             # 为旧数据库添加新列（如果不存在）
             try:
@@ -74,6 +77,13 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE folders ADD COLUMN ai_tags TEXT")
             except sqlite3.OperationalError:
                 pass  # 列已存在
+            try:
+                cursor.execute("ALTER TABLE folders ADD COLUMN parent_id INTEGER")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+            # 确保 parent_id 索引存在
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_folder_parent ON folders(parent_id)")
+
             
             # 文件索引表（优化版：用folder_id替代重复的路径文本）
             cursor.execute("""
@@ -149,7 +159,7 @@ class DatabaseManager:
             """)
     
     def _get_or_create_folder_id(self, cursor, folder_path: str, scan_source_id: int = None) -> int:
-        """获取或创建文件夹ID（路径去重核心方法）"""
+        """获取或创建文件夹ID（路径去重核心方法，自动填充 parent_id）"""
         if not folder_path:
             return None
         
@@ -161,12 +171,21 @@ class DatabaseManager:
         if row:
             return row[0]
         
-        # 不存在则创建
+        # 计算父目录路径
+        parent_path = '\\'.join(folder_path.split('\\')[:-1]) if '\\' in folder_path else None
+        parent_id = None
+        
+        if parent_path:
+            # 递归获取或创建父目录（确保层级完整）
+            parent_id = self._get_or_create_folder_id(cursor, parent_path, scan_source_id)
+        
+        # 创建当前目录
         cursor.execute(
-            "INSERT INTO folders (path, scan_source_id) VALUES (?, ?)",
-            (folder_path, scan_source_id)
+            "INSERT INTO folders (path, parent_id, scan_source_id) VALUES (?, ?, ?)",
+            (folder_path, parent_id, scan_source_id)
         )
         return cursor.lastrowid
+
     
     def _get_folder_path(self, cursor, folder_id: int) -> str:
         """根据文件夹ID获取路径"""
@@ -514,6 +533,108 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute("SELECT path FROM folders ORDER BY path")
             return [row['path'] for row in cursor.fetchall() if row['path']]
+    
+    def get_direct_subdirs(self, parent_path: str) -> list[dict]:
+        """获取指定路径下的直接子目录（优先使用 parent_id 索引查询）
+        
+        Args:
+            parent_path: 父目录路径
+            
+        Returns:
+            子目录列表，每项包含 name, path, has_children
+        """
+        parent_path = parent_path.replace('/', '\\').rstrip('\\')
+        
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # 获取父目录的 ID
+            cursor.execute("SELECT id FROM folders WHERE path = ? COLLATE NOCASE", (parent_path,))
+            parent_row = cursor.fetchone()
+            
+            if parent_row:
+                parent_id = parent_row['id']
+                
+                # 使用 parent_id 索引查询直接子目录（O(1) 复杂度）
+                cursor.execute("""
+                    SELECT id, path, ai_category, ai_tags
+                    FROM folders 
+                    WHERE parent_id = ?
+                """, (parent_id,))
+                
+                subdirs = []
+                for row in cursor.fetchall():
+                    folder_id = row['id']
+                    path = row['path']
+                    name = path.split('\\')[-1] if '\\' in path else path
+                    
+                    # 检查是否有子目录（使用 parent_id 索引）
+                    cursor.execute("SELECT 1 FROM folders WHERE parent_id = ? LIMIT 1", (folder_id,))
+                    has_subdirs = cursor.fetchone() is not None
+                    
+                    # 检查是否有文件
+                    cursor.execute("SELECT 1 FROM files WHERE folder_id = ? LIMIT 1", (folder_id,))
+                    has_files = cursor.fetchone() is not None
+                    
+                    subdirs.append({
+                        'name': name,
+                        'path': path,
+                        'has_children': has_subdirs or has_files
+                    })
+                
+                return sorted(subdirs, key=lambda x: x['name'].lower())
+            
+            # 回退方案：parent_id 未填充时使用 LIKE 查询
+            prefix = parent_path + '\\'
+            prefix_len = len(prefix)
+            
+            cursor.execute("""
+                SELECT DISTINCT 
+                    SUBSTR(path, ?) as remaining,
+                    path
+                FROM folders 
+                WHERE path LIKE ? ESCAPE '\\'
+                  AND path COLLATE NOCASE != ?
+                  AND INSTR(SUBSTR(path, ?), '\\') = 0
+            """, (prefix_len + 1, prefix.replace('\\', '\\\\') + '%', parent_path, prefix_len + 1))
+            
+            subdirs_by_name = {}
+            for row in cursor.fetchall():
+                name = row['remaining']
+                if name:
+                    name_key = name.lower()
+                    if name_key not in subdirs_by_name:
+                        subdirs_by_name[name_key] = {
+                            'name': name,
+                            'path': parent_path + '\\' + name,
+                        }
+            
+            result = []
+            for subdir in subdirs_by_name.values():
+                subdir_path = subdir['path']
+                subdir_prefix = subdir_path + '\\'
+                
+                cursor.execute("""
+                    SELECT 1 FROM folders 
+                    WHERE path LIKE ? ESCAPE '\\' 
+                    LIMIT 1
+                """, (subdir_prefix.replace('\\', '\\\\') + '%',))
+                has_subdirs = cursor.fetchone() is not None
+                
+                cursor.execute("""
+                    SELECT 1 FROM files f
+                    JOIN folders fo ON f.folder_id = fo.id
+                    WHERE fo.path COLLATE NOCASE = ?
+                    LIMIT 1
+                """, (subdir_path,))
+                has_files = cursor.fetchone() is not None
+                
+                subdir['has_children'] = has_subdirs or has_files
+                result.append(subdir)
+            
+            return sorted(result, key=lambda x: x['name'].lower())
+
+
     
     def get_stats(self) -> dict:
         """获取统计信息"""

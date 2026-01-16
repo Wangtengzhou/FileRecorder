@@ -37,6 +37,12 @@ class FileBrowserModel(QAbstractTableModel):
         self._loading: bool = False  # 是否正在加载
         self._folder_cache: dict = {}  # 目录内容缓存（最多缓存50个）
         self._cache_max_size = 50
+        
+        # 缓存图标（避免每次渲染时调用 QApplication.style()）
+        style = QApplication.style()
+        self._icon_folder = style.standardIcon(QStyle.SP_DirIcon)
+        self._icon_file = style.standardIcon(QStyle.SP_FileIcon)
+
     
     def rowCount(self, parent=QModelIndex()) -> int:
         return len(self._items)
@@ -72,11 +78,11 @@ class FileBrowserModel(QAbstractTableModel):
         
         elif role == Qt.DecorationRole:
             if index.column() == 0:  # 名称列显示图标
-                style = QApplication.style()
                 if item.get('is_dir'):
-                    return style.standardIcon(QStyle.SP_DirIcon)
+                    return self._icon_folder
                 else:
-                    return style.standardIcon(QStyle.SP_FileIcon)
+                    return self._icon_file
+
         
         elif role == Qt.ToolTipRole:
             if index.column() == 0:

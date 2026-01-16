@@ -219,6 +219,13 @@ class MainWindow(QMainWindow):
         
         self.file_table = QTableView()
         
+        # === 性能优化设置 ===
+        self.file_table.setWordWrap(False)  # 禁用自动换行
+        self.file_table.verticalHeader().setVisible(False)  # 隐藏行号，减少渲染
+        self.file_table.setHorizontalScrollMode(QTableView.ScrollPerPixel)  # 平滑横向滚动
+        self.file_table.setVerticalScrollMode(QTableView.ScrollPerPixel)  # 平滑纵向滚动
+
+        
         # 两个模型: 浏览器模式和平铺模式
         self.browser_model = FileBrowserModel(db=self.db)
         self.file_model = FileTableModel()
@@ -234,9 +241,9 @@ class MainWindow(QMainWindow):
         # 滚动事件监听（用于分页预加载）
         self.file_table.verticalScrollBar().valueChanged.connect(self._on_table_scroll)
         
-        # 设置列宽 - 允许用户调整
+        # 设置列宽 - 固定模式，避免自动计算
         header = self.file_table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Interactive)  # 允许调整
+        header.setSectionResizeMode(QHeaderView.Fixed)  # 固定列宽，提升性能
         header.setStretchLastSection(True)  # 最后一列拉伸
         # 设置默认宽度
         self.file_table.setColumnWidth(0, 300)  # 名称
@@ -244,6 +251,7 @@ class MainWindow(QMainWindow):
         self.file_table.setColumnWidth(2, 80)   # 大小
         self.file_table.setColumnWidth(3, 120)  # 时间
         self.file_table.setColumnWidth(4, 80)   # AI分类
+
         
         right_layout.addWidget(self.file_table)
         splitter.addWidget(right_widget)
@@ -432,12 +440,12 @@ class MainWindow(QMainWindow):
         """
         self.folder_tree.clear()
         
-        # 连接展开事件（只连接一次）
-        try:
+        # 连接展开事件（使用标志位避免重复连接/断开警告）
+        if hasattr(self, '_tree_expanded_connected') and self._tree_expanded_connected:
             self.folder_tree.itemExpanded.disconnect(self._on_tree_item_expanded)
-        except:
-            pass
         self.folder_tree.itemExpanded.connect(self._on_tree_item_expanded)
+        self._tree_expanded_connected = True
+
         
         folders = self.db.get_folder_tree()  # 获取所有扫描源
         
@@ -534,50 +542,10 @@ class MainWindow(QMainWindow):
                 item.addChild(child_item)
     
     def _get_subdirectories(self, parent_path: str) -> list:
-        """获取指定路径下的直接子目录"""
-        parent_path = parent_path.replace('/', '\\').rstrip('\\')
-        
-        # 从数据库获取所有目录
-        all_dirs = self.db.get_all_directories()
-        
-        subdirs = []
-        seen = set()
-        
-        for dir_path in all_dirs:
-            if not dir_path:
-                continue
-            
-            dir_path = dir_path.replace('/', '\\')
-            
-            # 检查是否是直接子目录
-            if dir_path.lower().startswith(parent_path.lower() + '\\'):
-                remaining = dir_path[len(parent_path) + 1:]
-                # 取第一级子目录
-                first_part = remaining.split('\\')[0]
-                
-                # 跳过空名称
-                if not first_part:
-                    continue
-                
-                full_subdir = parent_path + '\\' + first_part
-                
-                if full_subdir.lower() not in seen:
-                    seen.add(full_subdir.lower())
-                    # 检查是否有更深的子目录
-                    has_subdirs = any(
-                        d.replace('/', '\\').lower().startswith(full_subdir.lower() + '\\')
-                        for d in all_dirs if d
-                    )
-                    # 检查是否有子文件（通过数据库查询）
-                    file_count = self.db.get_file_count_in_folder(full_subdir)
-                    has_children = has_subdirs or file_count > 0
-                    subdirs.append({
-                        'name': first_part,
-                        'path': full_subdir,
-                        'has_children': has_children
-                    })
-        
-        return sorted(subdirs, key=lambda x: x['name'].lower())
+        """获取指定路径下的直接子目录（使用数据库优化查询）"""
+        # 直接调用数据库层的高效查询方法
+        return self.db.get_direct_subdirs(parent_path)
+
     
     def _on_folder_clicked(self, item: QTreeWidgetItem, column: int):
         """目录树项目点击处理"""
