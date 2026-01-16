@@ -95,6 +95,9 @@ class MainWindow(QMainWindow):
         self._history_forward = []  # 前进栈
         self._history_navigating = False  # 是否正在通过历史导航
         
+        # 文件监控管理器
+        self._watcher_manager = None
+        
         # 初始化界面
         self._init_ui()
         self._init_toolbar()
@@ -105,6 +108,13 @@ class MainWindow(QMainWindow):
         
         # 更新错误计数
         self._update_error_count()
+        
+        # 启动时检测监控目录变化（延迟执行，等待窗口显示）
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(500, self._check_watcher_on_startup)
+        
+        # 延迟启动运行时监控（在启动检测完成后）
+        QTimer.singleShot(2000, self._start_runtime_watcher)
         
         # 安装事件过滤器以捕获鼠标侧键
         from PySide6.QtWidgets import QApplication
@@ -259,6 +269,11 @@ class MainWindow(QMainWindow):
         ai_action.triggered.connect(self._on_ai_organize)
         toolbar.addAction(ai_action)
         
+        # 目录监控
+        watcher_action = QAction("📡 目录监控", self)
+        watcher_action.triggered.connect(self._on_watcher_dialog)
+        toolbar.addAction(watcher_action)
+        
         toolbar.addSeparator()
         
         # 导出
@@ -308,6 +323,14 @@ class MainWindow(QMainWindow):
         """初始化状态栏"""
         self.statusbar = QStatusBar()
         self.setStatusBar(self.statusbar)
+        
+        # 监控状态标签（左下角）
+        self.watcher_status_label = QLabel("⚪ 监控: 未启用")
+        self.watcher_status_label.setStyleSheet("color: #6c757d; padding: 0 10px;")
+        self.watcher_status_label.setToolTip("点击打开监控设置")
+        self.watcher_status_label.setCursor(Qt.PointingHandCursor)
+        self.watcher_status_label.mousePressEvent = lambda e: self._on_watcher_dialog()
+        self.statusbar.addWidget(self.watcher_status_label)
         
         # 进度条
         self.progress_bar = QProgressBar()
@@ -843,6 +866,221 @@ class MainWindow(QMainWindow):
         """扫描错误"""
         print(f"扫描错误: {error}")  # 记录日志
     
+    def _on_multi_scan_silent(self, paths: list):
+        """静默模式多目录扫描（后台执行，不显示进度弹窗）"""
+        print(f"[Watcher] 静默扫描: {paths}")
+        
+        # 使用与普通扫描相同的线程，但不显示进度对话框
+        if self.scanner_thread and self.scanner_thread.isRunning():
+            # 已有扫描在进行，将路径加入队列
+            for path in paths:
+                if path not in self.scan_queue:
+                    self.scan_queue.append(path)
+            print(f"[Watcher] 静默扫描已排队: {len(self.scan_queue)} 个待处理")
+            return
+        
+        # 加入队列并开始扫描
+        self.scan_queue = list(paths)
+        self._scan_total_files = 0
+        self._scan_total_errors = 0
+        self._scan_paths_count = len(paths)
+        
+        # 标记为静默模式
+        self._silent_scan_mode = True
+        
+        # 开始扫描第一个
+        self._start_next_scan_silent()
+    
+    def _start_next_scan_silent(self):
+        """静默模式开始下一个扫描"""
+        if not self.scan_queue:
+            # 扫描完成
+            print(f"[Watcher] 静默扫描完成: {self._scan_total_files} 个文件")
+            self._silent_scan_mode = False
+            self.statusbar.showMessage(f"后台更新完成: {self._scan_total_files} 个文件", 5000)
+            self._refresh_data()
+            return
+        
+        path = self.scan_queue.pop(0)
+        self.current_scan_path = path
+        
+        print(f"[Watcher] 静默扫描: {path}")
+        self.statusbar.showMessage(f"后台更新: {path}...")
+        
+        # 创建扫描器
+        from scanner.file_scanner import FileScanner, ScannerThread
+        
+        scanner = FileScanner(
+            db=self.db,
+            timeout=5
+        )
+        
+        self.scanner_thread = ScannerThread(scanner, path)
+        self.scanner_thread.progress.connect(self._on_scan_progress)
+        self.scanner_thread.finished.connect(self._on_silent_scan_finished)
+        self.scanner_thread.error.connect(self._on_scan_error)
+        self.scanner_thread.start()
+    
+    def _on_silent_scan_finished(self, result: dict):
+        """静默扫描完成"""
+        self._scan_total_files += result.get('file_count', 0)
+        self._scan_total_errors += result.get('error_count', 0)
+        
+        print(f"[Watcher] 静默扫描路径完成: {result.get('scan_source')}")
+        
+        # 继续下一个
+        self._start_next_scan_silent()
+    
+    def _on_watcher_dialog(self):
+        """打开目录监控管理窗口"""
+        from ui.watcher_dialog import WatcherDialog
+        dialog = WatcherDialog(self.db, self)
+        dialog.config_changed.connect(self._on_watcher_config_changed)
+        dialog.scan_requested.connect(self._on_watcher_scan_requested)
+        dialog.exec()
+    
+    def _on_watcher_config_changed(self):
+        """监控配置变更"""
+        print("[Watcher] 配置已变更，重新加载监控设置")
+        if self._watcher_manager:
+            # 重启监控以应用新配置
+            self._watcher_manager.restart()
+    
+    def _on_watcher_scan_requested(self, paths: list, silent: bool = None):
+        """监控窗口请求扫描目录"""
+        print(f"[Watcher] 收到扫描请求: {paths}")
+        if paths:
+            # 检查是否静默模式
+            if silent is None:
+                from watcher.config import WatcherConfig
+                config = WatcherConfig(self.db)
+                silent = config.is_silent_update()
+            
+            if silent:
+                # 静默模式：后台扫描，不显示进度弹窗
+                self._on_multi_scan_silent(paths)
+            else:
+                # 正常模式：显示进度弹窗
+                self._on_multi_scan_requested(paths)
+    
+    def _start_runtime_watcher(self):
+        """启动运行时文件监控"""
+        from watcher.manager import FileWatcherManager
+        
+        if self._watcher_manager is None:
+            self._watcher_manager = FileWatcherManager(self.db, self)
+            # 连接信号
+            self._watcher_manager.status_changed.connect(self._on_watcher_status_changed)
+            self._watcher_manager.scan_requested.connect(self._on_watcher_scan_requested)
+        
+        self._watcher_manager.start()
+    
+    def _on_watcher_status_changed(self, status_type: str, message: str):
+        """监控状态变更"""
+        # 更新状态栏显示
+        print(f"[Watcher] 状态: {status_type} - {message}")
+        
+        # 根据状态类型设置样式
+        if status_type == "normal":
+            icon = "🟢"
+            color = "#28a745"
+        elif status_type == "warning":
+            icon = "🟡"
+            color = "#ffc107"
+        elif status_type == "error":
+            icon = "🔴"
+            color = "#dc3545"
+        else:  # disabled
+            icon = "⚪"
+            color = "#6c757d"
+        
+        self.watcher_status_label.setText(f"{icon} {message}")
+        self.watcher_status_label.setStyleSheet(f"color: {color}; padding: 0 10px;")
+    
+    def _check_watcher_on_startup(self):
+        """启动时检测监控目录变化"""
+        from watcher.config import WatcherConfig
+        from watcher.reconciler import Reconciler
+        
+        config = WatcherConfig(self.db)
+        
+        # 检查功能是否启用
+        if not config.is_enabled():
+            print("[Watcher] 功能未启用，跳过启动检测")
+            return
+        
+        # 检查是否有监控目录
+        folders = config.get_enabled_folders()
+        if not folders:
+            print("[Watcher] 没有监控目录，跳过启动检测")
+            return
+        
+        # 执行对账
+        reconciler = Reconciler(config, self.db)
+        changed, errors = reconciler.check_all_folders()
+        
+        # 处理无法访问的目录（可选：提示用户）
+        if errors:
+            print(f"[Watcher] {len(errors)} 个目录无法访问")
+        
+        # 有变化时弹窗提示
+        if changed:
+            self._show_change_alert(changed, reconciler)
+    
+    def _show_change_alert(self, changes: list, reconciler):
+        """显示变化检测弹窗"""
+        from ui.change_dialogs import ChangeAlertDialog, ChangeSelectDialog
+        
+        # 第一层弹窗
+        alert = ChangeAlertDialog(len(changes), self)
+        result = alert.exec()
+        
+        if alert.result_action == "all":
+            # 全部更新
+            self._update_changed_folders(changes, reconciler)
+        elif alert.result_action == "select":
+            # 打开第二层弹窗选择
+            select_dialog = ChangeSelectDialog(changes, self)
+            if select_dialog.exec():
+                selected = select_dialog.get_selected()
+                if selected:
+                    self._update_changed_folders(selected, reconciler)
+        else:
+            # 下次提醒 - 不做任何操作
+            print("[Watcher] 用户选择下次提醒，跳过更新")
+    
+    def _update_changed_folders(self, changes: list, reconciler):
+        """更新选中的目录索引"""
+        print(f"[Watcher] 开始更新 {len(changes)} 个目录的索引")
+        
+        # 分离新目录和已索引目录
+        new_folders = []
+        existing_folders = []
+        
+        for change in changes:
+            if change.is_new_folder:
+                new_folders.append(change.folder.path)
+            else:
+                existing_folders.append(change)
+        
+        # 1. 新目录：触发完整扫描
+        if new_folders:
+            print(f"[Watcher] 触发新目录扫描: {new_folders}")
+            self._on_multi_scan_requested(new_folders)
+            # 扫描完成后会更新 mtime
+        
+        # 2. 已索引目录：触发增量扫描（暂时只更新 mtime，后续实现增量扫描）
+        for change in existing_folders:
+            folder = change.folder
+            print(f"[Watcher]   增量更新: {folder.path}")
+            # TODO: 执行实际的增量扫描，对比文件变化并更新索引
+            # 目前先触发完整扫描
+            self._on_multi_scan_requested([folder.path])
+            reconciler.update_folder_mtime(folder, change.new_mtime)
+        
+        print("[Watcher] 索引更新任务已启动")
+
+    
     def _search_input_click(self, event):
         """搜索框点击事件 - 首次获得焦点时全选"""
         from PySide6.QtWidgets import QLineEdit
@@ -937,41 +1175,87 @@ class MainWindow(QMainWindow):
     def _delete_folder_index(self, folder_path: str):
         """删除指定目录的所有索引记录"""
         from PySide6.QtWidgets import QMessageBox
+        from watcher.config import WatcherConfig
         
-        reply = QMessageBox.question(
-            self, "确认删除",
-            f"确定要删除以下目录的所有索引记录吗？\n\n{folder_path}\n\n此操作不会删除实际文件。",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
+        # 检查是否被监控
+        watcher_config = WatcherConfig(self.db)
+        monitored_folder = watcher_config.is_path_monitored(folder_path)
         
-        if reply == QMessageBox.Yes:
-            # 显示进度提示
-            self.statusbar.showMessage(f"正在删除 {folder_path} 的索引...")
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setRange(0, 0)  # 不确定模式
+        if monitored_folder:
+            # 被监控中，显示保护对话框
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("监控保护")
+            msg_box.setIcon(QMessageBox.Warning)
+            msg_box.setText(f"该目录正在被监控：\n\n{monitored_folder.path}")
+            msg_box.setInformativeText("请选择操作：")
             
-            # 强制更新UI
-            from PySide6.QtWidgets import QApplication
-            QApplication.processEvents()
+            # 添加按钮
+            remove_monitor_btn = msg_box.addButton("去除监控", QMessageBox.ActionRole)
+            remove_both_btn = msg_box.addButton("去除并删除记录", QMessageBox.ActionRole)
+            cancel_btn = msg_box.addButton("取消", QMessageBox.RejectRole)
             
-            # 删除该路径下的所有文件记录
-            deleted_count = self.db.clear_source(folder_path)
+            msg_box.setDefaultButton(cancel_btn)
+            msg_box.exec()
             
-            # 隐藏进度条
-            self.progress_bar.setVisible(False)
+            clicked_btn = msg_box.clickedButton()
             
-            # 保存当前展开状态
-            expanded_paths = self._get_expanded_paths()
+            if clicked_btn == cancel_btn:
+                return
+            elif clicked_btn == remove_monitor_btn:
+                # 只移除监控，不删除索引
+                watcher_config.remove_folder(monitored_folder.id)
+                QMessageBox.information(
+                    self, "监控已移除",
+                    f"已移除对该目录的监控。\n如需删除索引记录，请再次执行删除操作。"
+                )
+                # 通知监控管理器更新
+                if self._watcher_manager:
+                    self._watcher_manager.restart()
+                return
+            elif clicked_btn == remove_both_btn:
+                # 移除监控并继续删除索引
+                watcher_config.remove_folder(monitored_folder.id)
+                if self._watcher_manager:
+                    self._watcher_manager.restart()
+                # 继续执行删除索引
+        else:
+            # 未被监控，正常确认删除
+            reply = QMessageBox.question(
+                self, "确认删除",
+                f"确定要删除以下目录的所有索引记录吗？\n\n{folder_path}\n\n此操作不会删除实际文件。",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
             
-            # 刷新数据
-            self._refresh_data()
-            
-            # 恢复展开状态
-            self._restore_expanded_paths(expanded_paths)
-            
-            self.statusbar.showMessage(f"已删除 {deleted_count} 条索引记录", 5000)
-            QMessageBox.information(self, "删除完成", f"已删除 {deleted_count} 条索引记录")
+            if reply != QMessageBox.Yes:
+                return
+        
+        # 执行删除
+        self.statusbar.showMessage(f"正在删除 {folder_path} 的索引...")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)  # 不确定模式
+        
+        # 强制更新UI
+        from PySide6.QtWidgets import QApplication
+        QApplication.processEvents()
+        
+        # 删除该路径下的所有文件记录
+        deleted_count = self.db.clear_source(folder_path)
+        
+        # 隐藏进度条
+        self.progress_bar.setVisible(False)
+        
+        # 保存当前展开状态
+        expanded_paths = self._get_expanded_paths()
+        
+        # 刷新数据
+        self._refresh_data()
+        
+        # 恢复展开状态
+        self._restore_expanded_paths(expanded_paths)
+        
+        self.statusbar.showMessage(f"已删除 {deleted_count} 条索引记录", 5000)
+        QMessageBox.information(self, "删除完成", f"已删除 {deleted_count} 条索引记录")
 
     
     @Slot()
@@ -1597,60 +1881,14 @@ class MainWindow(QMainWindow):
     
     @Slot()
     def _on_show_errors(self):
-        """显示扫描错误列表"""
-        errors = self.db.get_scan_errors()
+        """显示错误日志对话框"""
+        from ui.error_log_dialog import ErrorLogDialog
         
-        if not errors:
-            QMessageBox.information(self, "无错误", "没有扫描错误记录")
-            return
+        dialog = ErrorLogDialog(self.db, self)
+        dialog.exec()
         
-        # 创建错误对话框
-        from PySide6.QtWidgets import QDialog, QTextEdit, QVBoxLayout, QPushButton, QHBoxLayout
-        
-        dialog = QDialog(self)
-        dialog.setWindowTitle(f"扫描错误 ({len(errors)} 条)")
-        dialog.resize(700, 400)
-        
-        layout = QVBoxLayout(dialog)
-        
-        # 错误列表
-        text_edit = QTextEdit()
-        text_edit.setReadOnly(True)
-        
-        error_text = ""
-        for err in errors:
-            from datetime import datetime
-            error_time = datetime.fromtimestamp(err['error_time']).strftime('%Y-%m-%d %H:%M:%S') if err.get('error_time') else ''
-            resolved = "✓" if err.get('resolved') else "✗"
-            error_text += f"[{resolved}] {error_time}\n"
-            error_text += f"    路径: {err.get('file_path', '')}\n"
-            error_text += f"    错误: {err.get('error_message', '')}\n"
-            error_text += f"    来源: {err.get('scan_source', '')}\n\n"
-        
-        text_edit.setPlainText(error_text)
-        layout.addWidget(text_edit)
-        
-        # 按钮区
-        btn_layout = QHBoxLayout()
-        
-        clear_btn = QPushButton("清除所有错误")
-        def on_clear():
-            reply = QMessageBox.question(dialog, "确认", "确定要清除所有错误记录吗？")
-            if reply == QMessageBox.Yes:
-                self.db.clear_errors()
-                self._update_error_count()
-                dialog.accept()
-        clear_btn.clicked.connect(on_clear)
-        btn_layout.addWidget(clear_btn)
-        
-        btn_layout.addStretch()
-        
-        close_btn = QPushButton("关闭")
-        close_btn.clicked.connect(dialog.accept)
-        btn_layout.addWidget(close_btn)
-        
-        layout.addLayout(btn_layout)
-        dialog.exec_()
+        # 刷新错误计数
+        self._update_error_count()
     
     def _update_error_count(self):
         """更新错误计数显示"""

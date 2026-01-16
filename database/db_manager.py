@@ -125,6 +125,28 @@ class DatabaseManager:
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_error_path ON scan_errors(file_path)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_error_source ON scan_errors(scan_source)")
+            
+            # 监控目录表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS monitored_folders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT UNIQUE NOT NULL,
+                    last_mtime REAL,
+                    last_check_time REAL,
+                    is_local INTEGER DEFAULT 1,
+                    poll_interval_minutes INTEGER DEFAULT 15,
+                    enabled INTEGER DEFAULT 1
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_monitored_path ON monitored_folders(path)")
+            
+            # 监控配置表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS watcher_config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """)
     
     def _get_or_create_folder_id(self, cursor, folder_path: str, scan_source_id: int = None) -> int:
         """获取或创建文件夹ID（路径去重核心方法）"""
