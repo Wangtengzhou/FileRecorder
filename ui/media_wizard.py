@@ -234,6 +234,7 @@ class ScanWorker(QThread):
                             filename=f.get('filename', ''),
                             filepath=filepath,
                             size_bytes=size,
+                            mtime=f.get('mtime', 0) or 0,
                             extension=ext,
                             file_id=(0, f.get('id', 0))
                         )
@@ -247,17 +248,22 @@ class ScanWorker(QThread):
                         # 从 disc_root 提取名称
                         disc_name = disc_root.split('/')[-1] if '/' in disc_root else disc_root
                         
-                        # 计算原盘内所有文件的总体积
+                        # 计算原盘内所有文件的总体积和最新修改时间
                         disc_size = 0
+                        disc_mtime = 0.0
                         for f in files:
                             parent = f.get('parent_folder', '').replace('\\', '/').lower()
                             if parent.startswith(disc_root):
                                 disc_size += f.get('size_bytes', 0)
+                                fm = f.get('mtime', 0) or 0
+                                if fm > disc_mtime:
+                                    disc_mtime = fm
                         
                         info = MediaInfo(
                             filename=disc_name,
                             filepath=disc_root,
                             size_bytes=disc_size,
+                            mtime=disc_mtime,
                             extension='.disc',
                             is_disc=True,
                             disc_type='BluRay',
@@ -271,6 +277,7 @@ class ScanWorker(QThread):
                             filename=iso_f.get('filename', ''),
                             filepath=iso_f.get('full_path', ''),
                             size_bytes=iso_f.get('size_bytes', 0),
+                            mtime=iso_f.get('mtime', 0) or 0,
                             extension='.iso',
                             is_disc=True,
                             disc_type='ISO',
@@ -321,7 +328,12 @@ class ScanWorker(QThread):
             # 4. 生成报告
             self.progress.emit(85, 100, "生成报告...")
             try:
-                generator = ReportGenerator()
+                # 根据报告路径扩展名确定格式
+                report_path = self.options.get('report_path', '')
+                report_format = "html" if report_path.lower().endswith('.html') else "markdown"
+                
+                report_options = ReportOptions(format=report_format)
+                generator = ReportGenerator(report_options)
                 report_content = generator.generate(all_media, self.directories)
                 
                 # 保存报告

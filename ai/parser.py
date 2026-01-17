@@ -39,6 +39,7 @@ class MediaInfo:
     filename: str
     filepath: str
     size_bytes: int = 0
+    mtime: float = 0.0  # 文件修改时间戳
     extension: str = ""
     
     # 解析结果
@@ -235,6 +236,7 @@ class MediaParser:
                 filename=filename,
                 filepath=str(filepath),
                 size_bytes=size,
+                mtime=stat.st_mtime,
                 extension=filepath.suffix.lower(),
                 file_id=(stat.st_dev, stat.st_ino)
             )
@@ -250,14 +252,25 @@ class MediaParser:
     
     def _parse_disc(self, disc_path: Path, disc_type: str) -> MediaInfo:
         """解析原盘目录"""
-        # 计算原盘总大小
-        total_size = sum(f.stat().st_size for f in disc_path.rglob('*') if f.is_file())
+        # 计算原盘总大小和获取目录修改时间
+        total_size = 0
+        max_mtime = 0.0
+        for f in disc_path.rglob('*'):
+            if f.is_file():
+                try:
+                    stat = f.stat()
+                    total_size += stat.st_size
+                    if stat.st_mtime > max_mtime:
+                        max_mtime = stat.st_mtime
+                except:
+                    pass
         
         info = MediaInfo(
             filename=disc_path.name,
             filepath=str(disc_path),
             size_bytes=total_size,
-            extension="",
+            mtime=max_mtime,
+            extension=".disc",
             is_disc=True,
             disc_type=disc_type,
             media_type="movie"

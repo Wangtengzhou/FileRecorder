@@ -1,6 +1,6 @@
 """
 HTML 导出模块 - 生成可离线浏览的单 HTML 文件
-参考 Snap2HTML 项目
+
 """
 import json
 import os
@@ -479,7 +479,7 @@ class HtmlExporter:
         }
         
         .col-name { flex: 1; min-width: 200px; }
-        .col-size { width: 100px; text-align: right; }
+        .col-size { width: 100px; }
         .col-date { width: 140px; }
         
         .file-list {
@@ -681,7 +681,9 @@ class HtmlExporter:
         function formatDate(timestamp) {
             if (!timestamp) return '-';
             const d = new Date(timestamp * 1000);
-            return d.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
+            const date = d.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
+            const time = d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+            return date + ' ' + time;
         }
         
         // Build tree
