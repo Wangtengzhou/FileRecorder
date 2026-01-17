@@ -145,6 +145,13 @@ class FileBrowserModel(QAbstractTableModel):
     def set_db(self, db):
         """设置数据库引用"""
         self._db = db
+        
+    def get_item(self, row: int) -> dict:
+        """获取指定行的数据项"""
+        if 0 <= row < len(self._items):
+            return self._items[row]
+        return None
+
     
     def navigate_to(self, path: str = ""):
         """导航到指定路径"""

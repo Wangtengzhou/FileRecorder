@@ -269,6 +269,38 @@ class SettingsDialog(QDialog):
         prompt_layout.addStretch()
         tabs.addTab(prompt_tab, "AI提示词")
         
+        # 常规设置页
+        general_tab = QWidget()
+        general_layout = QVBoxLayout(general_tab)
+        
+        # 关闭行为设置
+        close_group = QGroupBox("关闭行为")
+        close_layout = QVBoxLayout(close_group)
+        
+        close_label = QLabel("点击关闭按钮时：")
+        close_layout.addWidget(close_label)
+        
+        from PySide6.QtWidgets import QRadioButton, QButtonGroup
+        
+        self.close_btn_group = QButtonGroup(self)
+        
+        self.close_ask_radio = QRadioButton("每次询问")
+        self.close_tray_radio = QRadioButton("最小化到系统托盘")
+        self.close_exit_radio = QRadioButton("直接退出程序")
+        
+        self.close_btn_group.addButton(self.close_ask_radio, 0)
+        self.close_btn_group.addButton(self.close_tray_radio, 1)
+        self.close_btn_group.addButton(self.close_exit_radio, 2)
+        
+        close_layout.addWidget(self.close_ask_radio)
+        close_layout.addWidget(self.close_tray_radio)
+        close_layout.addWidget(self.close_exit_radio)
+        
+        general_layout.addWidget(close_group)
+        general_layout.addStretch()
+        
+        tabs.addTab(general_tab, "常规")
+        
         layout.addWidget(tabs)
         
         # 按钮
@@ -316,6 +348,17 @@ class SettingsDialog(QDialog):
         
         # AI 提示词设置
         self.system_preset_input.setPlainText(config.get("ai", "system_preset", default=""))
+        
+        # 关闭行为设置
+        close_to_tray = config.get("ui", "close_to_tray")
+        remembered = config.get("ui", "close_behavior_remembered", default=False)
+        
+        if not remembered or close_to_tray is None:
+            self.close_ask_radio.setChecked(True)
+        elif close_to_tray:
+            self.close_tray_radio.setChecked(True)
+        else:
+            self.close_exit_radio.setChecked(True)
     
     def _save_settings(self):
         """保存设置"""
@@ -346,6 +389,21 @@ class SettingsDialog(QDialog):
         
         # 界面设置
         config.set("ui", "remember_window_size", value=self.remember_size_check.isChecked())
+        
+        # 关闭行为设置
+        checked_id = self.close_btn_group.checkedId()
+        if checked_id == 0:
+            # 每次询问
+            config.set("ui", "close_to_tray", value=None)
+            config.set("ui", "close_behavior_remembered", value=False)
+        elif checked_id == 1:
+            # 最小化到托盘
+            config.set("ui", "close_to_tray", value=True)
+            config.set("ui", "close_behavior_remembered", value=True)
+        else:
+            # 直接退出
+            config.set("ui", "close_to_tray", value=False)
+            config.set("ui", "close_behavior_remembered", value=True)
         
         config.save()
         self.accept()

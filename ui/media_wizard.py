@@ -106,14 +106,16 @@ class ScanWorker(QThread):
     """扫描和处理工作线程"""
     progress = Signal(int, int, str)  # current, total, message
     finished = Signal(list, str)       # results, report_path
+    cancelled = Signal()               # 取消信号
     error = Signal(str)
     
-    def __init__(self, directories: list[str], options: dict, db_manager=None):
+    def __init__(self, directories: list[str], options: dict, db_manager=None, skip_scan_dirs: set = None):
         super().__init__()
         self.directories = directories
         self.options = options
         self.db = db_manager
         self._cancelled = False
+        self._skip_scan_dirs = skip_scan_dirs or set()  # 从索引选择的目录，跳过扫描
     
     def run(self):
         try:
@@ -135,6 +137,12 @@ class ScanWorker(QThread):
             for i, directory in enumerate(self.directories):
                 if self._cancelled:
                     return
+                
+                # 检查是否从索引选择（跳过扫描）
+                if directory in self._skip_scan_dirs:
+                    self.progress.emit((i+1) * 20 // total_dirs, 100, f"[{i+1}/{total_dirs}] {directory} (从索引读取)")
+                    continue
+                
                 self.progress.emit(i * 20 // total_dirs, 100, f"[{i+1}/{total_dirs}] 扫描: {directory}")
                 
                 try:
@@ -300,9 +308,15 @@ class ScanWorker(QThread):
                     pct = 40 + int(current / max(total, 1) * 40)
                     self.progress.emit(pct, 100, msg)
                 
-                classifier.process(all_media, options, on_progress)
+                classifier.process(all_media, options, on_progress, cancel_check=lambda: self._cancelled)
+
             except Exception as e:
                 self.progress.emit(80, 100, f"  ⚠️ AI 识别出错: {e}")
+            
+            # 检查是否取消 - 不再继续后续步骤
+            if self._cancelled:
+                self.cancelled.emit()
+                return
             
             # 4. 生成报告
             self.progress.emit(85, 100, "生成报告...")
@@ -318,6 +332,11 @@ class ScanWorker(QThread):
             except Exception as e:
                 self.progress.emit(90, 100, f"  ⚠️ 报告生成出错: {e}")
                 report_path = ""
+            
+            # 检查是否取消 - 不保存标签
+            if self._cancelled:
+                self.cancelled.emit()
+                return
             
             # 5. 更新 AI 分类结果到数据库
             if self.db and self.options.get('save_tags', True):
@@ -396,6 +415,7 @@ class ScanWorker(QThread):
                     self.progress.emit(100, 100, f"  ⚠️ 更新分类出错: {e}")
             
             self.finished.emit(all_media, report_path)
+
             
         except Exception as e:
             import traceback
@@ -418,6 +438,8 @@ class MediaWizardDialog(QDialog):
         self.worker = None
         self.results = []
         self._current_tags = []  # 当前标签列表
+        self._closing = False  # 标记窗口是否正在关闭
+
         
         self.setWindowTitle("媒体库整理向导")
         self.setMinimumSize(800, 600)
@@ -654,34 +676,38 @@ class MediaWizardDialog(QDialog):
             QMessageBox.warning(self, "警告", "数据库未初始化")
             return
         
-        # 获取所有目录
-        all_dirs = self.db.get_all_directories()
-        if not all_dirs:
-            QMessageBox.information(self, "提示", "没有已索引的目录")
-            return
+        # 使用新的索引浏览器对话框
+        from ui.index_browser_dialog import IndexBrowserDialog
+        dialog = IndexBrowserDialog(self.db, self)
         
-        # 弹出选择对话框
-        from PySide6.QtWidgets import QInputDialog
-        item, ok = QInputDialog.getItem(
-            self, "选择目录", 
-            "从已索引目录中选择\uff1a",
-            all_dirs, 0, False
-        )
-        
-        if ok and item:
-            # 检查是否已添加
-            for i in range(self.dir_list.count()):
-                if self.dir_list.item(i).text() == item:
-                    QMessageBox.information(self, "提示", "该目录已添加")
-                    return
-            self.dir_list.addItem(item)
+        if dialog.exec():
+            selected_path = dialog.selected_path
+            if selected_path:
+                # 检查是否已添加
+                for i in range(self.dir_list.count()):
+                    if self.dir_list.item(i).text() == selected_path:
+                        QMessageBox.information(self, "提示", "该目录已添加")
+                        return
+                # 添加并标记为“从索引选择”
+                from PySide6.QtWidgets import QListWidgetItem
+                item = QListWidgetItem(selected_path)
+                item.setData(Qt.UserRole, 'from_index')  # 标记
+                self.dir_list.addItem(item)
+
     
     def _on_start(self):
         """开始整理"""
-        # 收集目录
+        # 收集目录和标记
         directories = []
+        skip_scan_dirs = set()  # 从索引选择的目录
+        
         for i in range(self.dir_list.count()):
-            directories.append(self.dir_list.item(i).text())
+            item = self.dir_list.item(i)
+            path = item.text()
+            directories.append(path)
+            # 检查是否标记为“从索引选择”
+            if item.data(Qt.UserRole) == 'from_index':
+                skip_scan_dirs.add(path)
         
         if not directories:
             QMessageBox.warning(self, "警告", "请至少添加一个目录")
@@ -714,11 +740,13 @@ class MediaWizardDialog(QDialog):
         self.log_text.clear()
         
         # 启动工作线程
-        self.worker = ScanWorker(directories, options, self.db)
+        self.worker = ScanWorker(directories, options, self.db, skip_scan_dirs)
         self.worker.progress.connect(self._on_progress)
         self.worker.finished.connect(self._on_finished)
+        self.worker.cancelled.connect(self._on_cancelled)
         self.worker.error.connect(self._on_error)
         self.worker.start()
+
     
     def _on_cancel(self):
         """取消操作"""
@@ -770,6 +798,25 @@ class MediaWizardDialog(QDialog):
         
         # 通知主窗口刷新数据
         self.scan_finished.emit()
+    
+    def _on_cancelled(self):
+        """处理取消"""
+        self.start_btn.setEnabled(True)
+        self.status_label.setText("已取消")
+        self.log_text.append("任务已取消")
+        # 只在非关闭状态下弹窗
+        if not self._closing:
+            QMessageBox.information(self, "已取消", "任务已取消，未生成报告和标签。")
+    
+    def closeEvent(self, event):
+        """关闭窗口时终止任务"""
+        self._closing = True
+        if self.worker and self.worker.isRunning():
+            self.worker.cancel()
+            # 不等待，立即关闭窗口，后台线程自行终止
+        event.accept()
+
+
     
     def _on_error(self, error: str):
         """处理错误"""

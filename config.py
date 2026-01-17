@@ -39,7 +39,9 @@ class Config:
         "ui": {
             "window_width": 1200,
             "window_height": 800,
-            "remember_window_size": True
+            "remember_window_size": True,
+            "close_to_tray": None,              # None=未设置(每次询问), True=最小化到托盘, False=退出
+            "close_behavior_remembered": False  # 是否记住关闭行为
         }
     }
     

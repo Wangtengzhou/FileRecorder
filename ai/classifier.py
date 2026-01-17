@@ -264,7 +264,8 @@ class BatchClassifier:
     
     def process(self, media_list: list[MediaInfo],
                 options: ClassifyOptions = None,
-                progress_callback=None) -> list[MediaInfo]:
+                progress_callback=None,
+                cancel_check=None) -> list[MediaInfo]:
         """
         处理整个媒体列表（全部交给 AI）
         
@@ -272,6 +273,7 @@ class BatchClassifier:
             media_list: 媒体列表
             options: 分类选项
             progress_callback: 进度回调 (current, total, message)
+            cancel_check: 取消检查函数，返回 True 表示应取消
             
         Returns:
             处理后的列表
@@ -289,6 +291,12 @@ class BatchClassifier:
         
         # 分批处理
         for i in range(0, total, options.batch_size):
+            # 检查是否取消
+            if cancel_check and cancel_check():
+                if progress_callback:
+                    progress_callback(processed, total, "⏹️ 已取消")
+                return media_list
+            
             batch = media_list[i:i + options.batch_size]
             batch_end = min(i + options.batch_size, total)
             
@@ -327,6 +335,7 @@ class BatchClassifier:
             batch_delay = config.get("ai", "batch_delay_ms", default=500)
             if batch_delay > 0 and i + options.batch_size < total:
                 time.sleep(batch_delay / 1000.0)
+
         
         # ====================
         # 二次检测流程
@@ -342,6 +351,12 @@ class BatchClassifier:
             
             # 分批进行二次检测
             for i in range(0, len(needs_context), options.batch_size):
+                # 检查是否取消
+                if cancel_check and cancel_check():
+                    if progress_callback:
+                        progress_callback(total, total, "⏹️ 已取消")
+                    return media_list
+                
                 batch = needs_context[i:i + options.batch_size]
                 batch_end = min(i + options.batch_size, len(needs_context))
                 
@@ -353,6 +368,7 @@ class BatchClassifier:
                         total, total,
                         f"二次检测: {i+1}-{batch_end} / {len(needs_context)}"
                     )
+
                 
                 try:
                     result = self.classifier.classify_with_context(batch, options)
