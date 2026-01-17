@@ -41,7 +41,8 @@ class Config:
             "window_height": 800,
             "remember_window_size": True,
             "close_to_tray": None,              # None=未设置(每次询问), True=最小化到托盘, False=退出
-            "close_behavior_remembered": False  # 是否记住关闭行为
+            "close_behavior_remembered": False, # 是否记住关闭行为
+            "theme": "auto"                     # auto=跟随系统, light=浅色, dark=深色
         }
     }
     

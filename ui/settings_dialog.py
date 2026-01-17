@@ -32,6 +32,7 @@ class ApiTestThread(QThread):
 
 class SettingsDialog(QDialog):
     """设置对话框"""
+    theme_changed = Signal(str)  # 主题变更信号：'light', 'dark', 'auto'
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -297,6 +298,29 @@ class SettingsDialog(QDialog):
         close_layout.addWidget(self.close_exit_radio)
         
         general_layout.addWidget(close_group)
+        
+        # 主题设置
+        theme_group = QGroupBox("主题")
+        theme_layout = QVBoxLayout(theme_group)
+        
+        theme_label = QLabel("外观主题：")
+        theme_layout.addWidget(theme_label)
+        
+        self.theme_btn_group = QButtonGroup(self)
+        
+        self.theme_auto_radio = QRadioButton("跟随系统（自动切换）")
+        self.theme_light_radio = QRadioButton("浅色")
+        self.theme_dark_radio = QRadioButton("深色")
+        
+        self.theme_btn_group.addButton(self.theme_auto_radio, 0)
+        self.theme_btn_group.addButton(self.theme_light_radio, 1)
+        self.theme_btn_group.addButton(self.theme_dark_radio, 2)
+        
+        theme_layout.addWidget(self.theme_auto_radio)
+        theme_layout.addWidget(self.theme_light_radio)
+        theme_layout.addWidget(self.theme_dark_radio)
+        
+        general_layout.addWidget(theme_group)
         general_layout.addStretch()
         
         tabs.addTab(general_tab, "常规")
@@ -359,6 +383,15 @@ class SettingsDialog(QDialog):
             self.close_tray_radio.setChecked(True)
         else:
             self.close_exit_radio.setChecked(True)
+        
+        # 主题设置
+        theme = config.get("ui", "theme", default="auto")
+        if theme == "light":
+            self.theme_light_radio.setChecked(True)
+        elif theme == "dark":
+            self.theme_dark_radio.setChecked(True)
+        else:
+            self.theme_auto_radio.setChecked(True)
     
     def _save_settings(self):
         """保存设置"""
@@ -405,7 +438,21 @@ class SettingsDialog(QDialog):
             config.set("ui", "close_to_tray", value=False)
             config.set("ui", "close_behavior_remembered", value=True)
         
+        # 主题设置
+        theme_id = self.theme_btn_group.checkedId()
+        if theme_id == 1:
+            new_theme = "light"
+        elif theme_id == 2:
+            new_theme = "dark"
+        else:
+            new_theme = "auto"
+        config.set("ui", "theme", value=new_theme)
+        
         config.save()
+        
+        # 发送主题变更信号
+        self.theme_changed.emit(new_theme)
+        
         self.accept()
     
     def _on_test_api(self):

@@ -68,10 +68,7 @@ class FileTableModel(QAbstractTableModel):
             # 返回原始值用于排序
             return value
         
-        elif role == Qt.BackgroundRole:
-            # AI分类的行用不同背景色
-            if row_data.get('ai_category'):
-                return QColor(240, 255, 240)  # 浅绿色
+        # 不设置特殊背景色，让系统主题处理以支持深色模式
         
         return None
     

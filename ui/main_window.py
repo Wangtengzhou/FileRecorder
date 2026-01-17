@@ -124,7 +124,15 @@ class MainWindow(QMainWindow):
         # 安装事件过滤器以捕获鼠标侧键
         from PySide6.QtWidgets import QApplication
         QApplication.instance().installEventFilter(self)
-    
+        
+    def showEvent(self, event):
+        """窗口显示事件"""
+        super().showEvent(event)
+        # 延迟设置标题栏颜色，确保窗口已完全初始化 (关键修复)
+        from PySide6.QtCore import QTimer
+        from ui.theme import theme_manager
+        QTimer.singleShot(100, lambda: theme_manager.apply_theme(theme_manager._mode))
+
     def _init_ui(self):
         """初始化界面"""
         central_widget = QWidget()
@@ -1878,7 +1886,10 @@ class MainWindow(QMainWindow):
     def _on_settings(self):
         """打开设置对话框"""
         from ui.settings_dialog import SettingsDialog
+        from ui.theme import theme_manager  # 延迟导入以避免循环依赖
+        
         dialog = SettingsDialog(self)
+        dialog.theme_changed.connect(theme_manager.set_mode)
         if dialog.exec_():
             config.save()
             self.statusbar.showMessage("设置已保存", 2000)

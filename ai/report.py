@@ -764,6 +764,17 @@ class ReportGenerator:
             const list = document.getElementById('fileList');
             list.innerHTML = '';
             
+            // 高亮函数：支持多关键词
+            const keywords = highlight ? highlight.split(/\s+/).filter(k => k.length > 0) : [];
+            function highlightText(text) {
+                if (keywords.length === 0) return text;
+                let result = text;
+                keywords.forEach(kw => {
+                    if (kw) result = result.replace(new RegExp(kw, 'gi'), '<span class="highlight">$&</span>');
+                });
+                return result;
+            }
+            
             const sorted = sortFiles(currentFiles, currentSort.field, currentSort.asc);
             
             sorted.forEach(file => {
@@ -778,8 +789,8 @@ class ReportGenerator:
                 icon.innerHTML = file.is_disc ? ICONS.disc : ICONS.file;
                 name.appendChild(icon);
                 const label = document.createElement('span');
-                if (highlight) {
-                    label.innerHTML = file.filename.replace(new RegExp(highlight, 'gi'), '<span class="highlight">$&</span>');
+                if (keywords.length > 0) {
+                    label.innerHTML = highlightText(file.filename);
                 } else {
                     label.textContent = file.filename;
                 }
@@ -862,11 +873,11 @@ class ReportGenerator:
         }
         
         function doSearch() {
-            const keyword = document.getElementById('searchInput').value.trim().toLowerCase();
+            const rawKeyword = document.getElementById('searchInput').value.trim();
             const catFilter = document.getElementById('categoryFilter').value;
             const extFilter = document.getElementById('extFilter').value;
             
-            if (!keyword && !catFilter && !extFilter) return;
+            if (!rawKeyword && !catFilter && !extFilter) return;
             
             if (!isShowingSearchResults) {
                 categoryBeforeSearch = currentCategory;
@@ -875,12 +886,13 @@ class ReportGenerator:
             
             let results = DATA.allFiles;
             
-            if (keyword) {
-                results = results.filter(f => 
-                    f.filename.toLowerCase().includes(keyword) ||
-                    (f.code && f.code.toLowerCase().includes(keyword)) ||
-                    (f.title && f.title.toLowerCase().includes(keyword))
-                );
+            // 支持空格分隔的多关键词搜索（AND 逻辑）
+            if (rawKeyword) {
+                const keywords = rawKeyword.toLowerCase().split(/\s+/).filter(k => k.length > 0);
+                results = results.filter(f => {
+                    const searchText = (f.filename + ' ' + (f.code || '') + ' ' + (f.title || '')).toLowerCase();
+                    return keywords.every(kw => searchText.includes(kw));
+                });
             }
             
             if (catFilter) {
@@ -892,7 +904,7 @@ class ReportGenerator:
             }
             
             currentFiles = results.slice(0, 1000);
-            renderFiles(keyword);
+            renderFiles(rawKeyword);
             
             let footerText = `搜索结果: ${results.length} 个文件`;
             if (results.length > 1000) footerText += ' (显示前 1000 条)';

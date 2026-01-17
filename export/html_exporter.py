@@ -1001,9 +1001,19 @@ class HtmlExporter:
             });
         }
         
-        function showSearchResults(results, highlight = '') {
+        function showSearchResults(results, keywords = []) {
             const list = document.getElementById('fileList');
             list.innerHTML = '';
+            
+            // 高亮函数：高亮所有关键词
+            function highlightText(text) {
+                if (!keywords || keywords.length === 0) return text;
+                let result = text;
+                keywords.forEach(kw => {
+                    if (kw) result = result.replace(new RegExp(kw, 'gi'), '<span class="highlight">$&</span>');
+                });
+                return result;
+            }
             
             results.forEach(item => {
                 const row = document.createElement('div');
@@ -1023,8 +1033,8 @@ class HtmlExporter:
                 
                 const label = document.createElement('span');
                 const displayName = item.isDir ? item.n + ' (文件夹)' : item.n;
-                if (highlight) {
-                    label.innerHTML = displayName.replace(new RegExp(highlight, 'gi'), '<span class="highlight">$&</span>');
+                if (keywords && keywords.length > 0) {
+                    label.innerHTML = highlightText(displayName);
                 } else {
                     label.textContent = displayName;
                 }
@@ -1070,17 +1080,23 @@ class HtmlExporter:
             isShowingSearchResults = true;
             
             const results = [];
-            const kw = keyword.toLowerCase();
+            // 支持空格分隔的多关键词搜索（AND 逻辑）
+            const keywords = keyword.toLowerCase().split(/\s+/).filter(k => k.length > 0);
+            
+            function matchesAllKeywords(text) {
+                const lowerText = text.toLowerCase();
+                return keywords.every(kw => lowerText.includes(kw));
+            }
             
             function searchNode(node, path) {
                 // 搜索文件夹名称
-                if (node.n.toLowerCase().includes(kw)) {
+                if (matchesAllKeywords(node.n)) {
                     results.push({n: node.n, isDir: true, path: path});
                 }
                 // 搜索文件
                 if (node.f) {
                     node.f.forEach(file => {
-                        if (file.n.toLowerCase().includes(kw)) {
+                        if (matchesAllKeywords(file.n)) {
                             results.push({...file, path: path});
                         }
                     });
@@ -1094,7 +1110,7 @@ class HtmlExporter:
             
             DATA.tree.forEach(node => searchNode(node, ''));
             const displayResults = results.slice(0, 1000);
-            showSearchResults(displayResults, keyword);
+            showSearchResults(displayResults, keywords);
             
             let footerText = `搜索 "${keyword}" - ${results.length} 个结果`;
             if (results.length > 1000) {
