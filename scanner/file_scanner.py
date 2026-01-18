@@ -10,6 +10,9 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 
 from PySide6.QtCore import QObject, Signal, QThread
 
+from logger import get_logger
+
+logger = get_logger("scanner")
 
 class FileScanner(QObject):
     """文件扫描器"""
@@ -326,7 +329,7 @@ class FileScanner(QObject):
         total_inserted += self._flush_batch(force=True)
         
         # 输出扫描统计日志
-        print(f"扫描统计: 成功 {successful_files}, 失败 {failed_files}, 忽略目录 {ignored_dirs}")
+        logger.info(f"扫描统计: 成功 {successful_files}, 失败 {failed_files}, 忽略目录 {ignored_dirs}")
         
         # 风险防护：如果用户取消，可选择清理已写入数据
         # 注意：这里保留已扫描数据，用户可在界面中删除

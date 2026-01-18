@@ -20,6 +20,10 @@ from config import config
 
 def main():
     """主函数"""
+    # 初始化日志系统
+    from logger import setup_logging
+    setup_logging()
+    
     # 高DPI支持
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough

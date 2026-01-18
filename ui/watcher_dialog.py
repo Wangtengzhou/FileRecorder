@@ -11,6 +11,9 @@ from PySide6.QtCore import Qt, Signal
 
 from watcher.config import WatcherConfig, MonitoredFolder
 
+from logger import get_logger
+
+logger = get_logger("watcher")
 
 class WatcherDialog(QDialog):
     """目录监控管理窗口"""
@@ -212,7 +215,7 @@ class WatcherDialog(QDialog):
                 )
                 if reply == QMessageBox.Yes:
                     # 立即发射扫描请求，不关闭当前窗口
-                    print(f"[Watcher] 立即触发扫描: {path}")
+                    logger.info(f"立即触发扫描: {path}")
                     self.scan_requested.emit([path])
     
     def _check_if_indexed(self, path: str) -> bool:
@@ -295,12 +298,12 @@ class WatcherDialog(QDialog):
                 if enabled and not folder.enabled:
                     newly_enabled.append(folder.path)
         
-        print("[Watcher] 配置已保存")
+        logger.info("配置已保存")
         self.config_changed.emit()
         
         # 检测新启用目录的索引状态
         if newly_enabled:
-            print(f"[Watcher] 检测新启用目录的索引状态: {newly_enabled}")
+            logger.info(f"检测新启用目录的索引状态: {newly_enabled}")
             unindexed = [p for p in newly_enabled if not self._check_if_indexed(p)]
             
             if unindexed:

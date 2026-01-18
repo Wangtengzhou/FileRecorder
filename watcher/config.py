@@ -7,6 +7,9 @@ import time
 from typing import Optional
 from dataclasses import dataclass, field
 
+from logger import get_logger
+
+logger = get_logger("watcher")
 
 @dataclass
 class MonitoredFolder:
@@ -42,7 +45,7 @@ class WatcherConfig:
         """设置监控功能开关"""
         self._set_config("feature_enabled", "true" if enabled else "false")
         self._cache_enabled = enabled
-        print(f"[Watcher] 功能开关: {'启用' if enabled else '禁用'}")
+        logger.info(f"功能开关: {'启用' if enabled else '禁用'}")
     
     def is_silent_update(self) -> bool:
         """检查是否开启静默更新"""
@@ -52,7 +55,7 @@ class WatcherConfig:
     def set_silent_update(self, enabled: bool):
         """设置静默更新开关"""
         self._set_config("silent_update", "true" if enabled else "false")
-        print(f"[Watcher] 静默更新: {'启用' if enabled else '禁用'}")
+        logger.info(f"静默更新: {'启用' if enabled else '禁用'}")
     
     def get_default_poll_interval(self) -> int:
         """获取默认轮询间隔（分钟）"""
@@ -110,7 +113,7 @@ class WatcherConfig:
                 """, (path, 1 if is_local else 0, poll_interval))
                 
                 folder_id = cursor.lastrowid
-                print(f"[Watcher] 添加监控目录: {path} ({'本地' if is_local else '网络'})")
+                logger.info(f"添加监控目录: {path} ({'本地' if is_local else '网络'})")
                 
                 return MonitoredFolder(
                     id=folder_id,
@@ -120,7 +123,7 @@ class WatcherConfig:
                     enabled=True
                 )
             except Exception as e:
-                print(f"[Watcher] 添加目录失败: {e}")
+                logger.warning(f"添加目录失败: {e}")
                 return None
     
     def remove_folder(self, folder_id: int) -> bool:
@@ -130,7 +133,7 @@ class WatcherConfig:
             cursor.execute("DELETE FROM monitored_folders WHERE id = ?", (folder_id,))
             success = cursor.rowcount > 0
             if success:
-                print(f"[Watcher] 移除监控目录 ID: {folder_id}")
+                logger.info(f"移除监控目录 ID: {folder_id}")
             return success
     
     def update_folder(self, folder_id: int, **kwargs) -> bool:
@@ -190,7 +193,7 @@ class WatcherConfig:
             )
             success = cursor.rowcount > 0
             if success:
-                print(f"[Watcher] 移除监控目录: {path}")
+                logger.info(f"移除监控目录: {path}")
             return success
     
     def find_parent_child_conflicts(self, new_path: str) -> dict:
@@ -218,7 +221,7 @@ class WatcherConfig:
         """合并子目录到父目录（移除子目录监控）"""
         for child in children:
             self.remove_folder(child.id)
-            print(f"[Watcher] 合并: 移除子目录 {child.path} (父目录 {parent_path} 已覆盖)")
+            logger.info(f"合并: 移除子目录 {child.path} (父目录 {parent_path} 已覆盖)")
     
     # ========== 内部方法 ==========
     

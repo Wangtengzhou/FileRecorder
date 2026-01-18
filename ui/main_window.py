@@ -24,6 +24,9 @@ from ui.scan_dialog import MultiFolderScanDialog
 from ui.progress_dialog import ScanProgressDialog
 from config import config
 
+from logger import get_logger
+
+logger = get_logger("ui")
 
 def resource_path(relative_path):
     """获取资源绝对路径（支持 PyInstaller 打包）"""
@@ -845,11 +848,11 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_scan_error(self, error: str):
         """扫描错误"""
-        print(f"扫描错误: {error}")  # 记录日志
+        logger.warning(f"扫描错误: {error}")
     
     def _on_multi_scan_silent(self, paths: list):
         """静默模式多目录扫描（后台执行，不显示进度弹窗）"""
-        print(f"[Watcher] 静默扫描: {paths}")
+        logger.info(f"静默扫描: {paths}")
         
         # 使用与普通扫描相同的线程，但不显示进度对话框
         if self.scanner_thread and self.scanner_thread.isRunning():
@@ -857,7 +860,7 @@ class MainWindow(QMainWindow):
             for path in paths:
                 if path not in self.scan_queue:
                     self.scan_queue.append(path)
-            print(f"[Watcher] 静默扫描已排队: {len(self.scan_queue)} 个待处理")
+            logger.info(f"静默扫描已排队: {len(self.scan_queue)} 个待处理")
             return
         
         # 加入队列并开始扫描
@@ -876,7 +879,7 @@ class MainWindow(QMainWindow):
         """静默模式开始下一个扫描"""
         if not self.scan_queue:
             # 扫描完成
-            print(f"[Watcher] 静默扫描完成: {self._scan_total_files} 个文件")
+            logger.info(f"静默扫描完成: {self._scan_total_files} 个文件")
             self._silent_scan_mode = False
             self.statusbar.showMessage(f"后台更新完成: {self._scan_total_files} 个文件", 5000)
             self._refresh_data()
@@ -885,7 +888,7 @@ class MainWindow(QMainWindow):
         path = self.scan_queue.pop(0)
         self.current_scan_path = path
         
-        print(f"[Watcher] 静默扫描: {path}")
+        logger.info(f"静默扫描: {path}")
         self.statusbar.showMessage(f"后台更新: {path}...")
         
         # 创建扫描器
@@ -907,7 +910,7 @@ class MainWindow(QMainWindow):
         self._scan_total_files += result.get('file_count', 0)
         self._scan_total_errors += result.get('error_count', 0)
         
-        print(f"[Watcher] 静默扫描路径完成: {result.get('scan_source')}")
+        logger.info(f"静默扫描路径完成: {result.get('scan_source')}")
         
         # 继续下一个
         self._start_next_scan_silent()
@@ -922,14 +925,14 @@ class MainWindow(QMainWindow):
     
     def _on_watcher_config_changed(self):
         """监控配置变更"""
-        print("[Watcher] 配置已变更，重新加载监控设置")
+        logger.info("配置已变更，重新加载监控设置")
         if self._watcher_manager:
             # 重启监控以应用新配置
             self._watcher_manager.restart()
     
     def _on_watcher_scan_requested(self, paths: list, silent: bool = None):
         """监控窗口请求扫描目录"""
-        print(f"[Watcher] 收到扫描请求: {paths}")
+        logger.info(f"收到扫描请求: {paths}")
         if paths:
             # 检查是否静默模式
             if silent is None:
@@ -959,7 +962,7 @@ class MainWindow(QMainWindow):
     def _on_watcher_status_changed(self, status_type: str, message: str):
         """监控状态变更"""
         # 更新状态栏显示
-        print(f"[Watcher] 状态: {status_type} - {message}")
+        logger.debug(f"状态: {status_type} - {message}")
         
         # 根据状态类型设置样式
         if status_type == "normal":
@@ -990,13 +993,13 @@ class MainWindow(QMainWindow):
         
         # 检查功能是否启用
         if not config.is_enabled():
-            print("[Watcher] 功能未启用，跳过启动检测")
+            logger.info("功能未启用，跳过启动检测")
             return
         
         # 检查是否有监控目录
         folders = config.get_enabled_folders()
         if not folders:
-            print("[Watcher] 没有监控目录，跳过启动检测")
+            logger.info("没有监控目录，跳过启动检测")
             return
         
         # 执行对账
@@ -1005,7 +1008,7 @@ class MainWindow(QMainWindow):
         
         # 处理无法访问的目录（可选：提示用户）
         if errors:
-            print(f"[Watcher] {len(errors)} 个目录无法访问")
+            logger.warning(f"{len(errors)} 个目录无法访问")
         
         # 有变化时弹窗提示
         if changed:
@@ -1031,11 +1034,11 @@ class MainWindow(QMainWindow):
                     self._update_changed_folders(selected, reconciler)
         else:
             # 下次提醒 - 不做任何操作
-            print("[Watcher] 用户选择下次提醒，跳过更新")
+            logger.info("用户选择下次提醒，跳过更新")
     
     def _update_changed_folders(self, changes: list, reconciler):
         """更新选中的目录索引"""
-        print(f"[Watcher] 开始更新 {len(changes)} 个目录的索引")
+        logger.info(f"开始更新 {len(changes)} 个目录的索引")
         
         # 分离新目录和已索引目录
         new_folders = []
@@ -1049,20 +1052,20 @@ class MainWindow(QMainWindow):
         
         # 1. 新目录：触发完整扫描
         if new_folders:
-            print(f"[Watcher] 触发新目录扫描: {new_folders}")
+            logger.info(f"触发新目录扫描: {new_folders}")
             self._on_multi_scan_requested(new_folders)
             # 扫描完成后会更新 mtime
         
         # 2. 已索引目录：触发增量扫描（暂时只更新 mtime，后续实现增量扫描）
         for change in existing_folders:
             folder = change.folder
-            print(f"[Watcher]   增量更新: {folder.path}")
+            logger.debug(f"  增量更新: {folder.path}")
             # TODO: 执行实际的增量扫描，对比文件变化并更新索引
             # 目前先触发完整扫描
             self._on_multi_scan_requested([folder.path])
             reconciler.update_folder_mtime(folder, change.new_mtime)
         
-        print("[Watcher] 索引更新任务已启动")
+        logger.info("索引更新任务已启动")
 
     
     def _search_input_click(self, event):

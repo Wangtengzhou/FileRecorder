@@ -13,6 +13,9 @@ from config import config
 from ai.client import AIClient
 from ai.parser import MediaInfo, format_size
 from ai.prompts import build_prompt, build_context_prompt
+from logger import get_logger
+
+logger = get_logger("ai")
 
 # Debug 开关 - 开发时设为 True，发布时设为 False
 DEBUG_CLASSIFIER = True
@@ -83,8 +86,8 @@ class MediaClassifier:
             result = self._parse_response(response)
             return result
         except Exception as e:
-            print(f"解析 AI 响应失败: {e}")
-            print(f"原始响应: {response[:500]}...")
+            logger.warning(f"解析 AI 响应失败: {e}")
+            logger.debug(f"原始响应: {response[:500]}...")
             return {"error": f"解析响应失败: {e}"}
     
     def classify_with_context(self, media_list: list[MediaInfo], 
@@ -113,7 +116,7 @@ class MediaClassifier:
             )
         
         if DEBUG_CLASSIFIER:
-            print(f"  📝 二次检测请求: {len(file_info)} 个文件")
+            logger.debug(f"  📝 二次检测请求: {len(file_info)} 个文件")
         
         # 使用二次检测专用 Prompt
         messages = build_context_prompt(file_info, options.hint)
@@ -127,19 +130,19 @@ class MediaClassifier:
         if DEBUG_CLASSIFIER:
             # 显示响应的前200字符
             preview = response[:200].replace('\n', ' ')
-            print(f"  📨 二次检测响应预览: {preview}...")
+            logger.debug(f"  📨 二次检测响应预览: {preview}...")
         
         # 解析响应
         try:
             result = self._parse_response(response)
             if DEBUG_CLASSIFIER:
                 results_list = result.get("results", []) or result.get("files", [])
-                print(f"  📊 解析结果: {len(results_list)} 个项目")
+                logger.debug(f"  📊 解析结果: {len(results_list)} 个项目")
             return result
         except Exception as e:
-            print(f"解析二次检测响应失败: {e}")
+            logger.warning(f"解析二次检测响应失败: {e}")
             if DEBUG_CLASSIFIER:
-                print(f"  原始响应: {response[:500]}")
+                logger.debug(f"  原始响应: {response[:500]}")
             return {"error": f"解析响应失败: {e}"}
     
     def _parse_response(self, response: str) -> dict:
@@ -222,13 +225,13 @@ class MediaClassifier:
                 # Debug 输出
                 if DEBUG_CLASSIFIER:
                     if info.skip:
-                        print(f"  🚫 SKIP: {info.filename}")
+                        logger.debug(f"  🚫 SKIP: {info.filename}")
                     elif info.needs_context:
-                        print(f"  🔍 需要二次检测: {info.filename}")
+                        logger.debug(f"  🔍 需要二次检测: {info.filename}")
                     if info.code:
-                        print(f"  📌 番号: {info.code} ← {info.filename}")
+                        logger.debug(f"  📌 番号: {info.code} ← {info.filename}")
                     elif raw_code and not info.code:
-                        print(f"  📝 未检测到有效番号: {info.filename}")
+                        logger.debug(f"  📝 未检测到有效番号: {info.filename}")
         
         # 检查是否有文件未被 AI 返回（可能被内容审查过滤）
         # 这些文件自动标记为需要二次检测
@@ -237,7 +240,7 @@ class MediaClassifier:
                 info.needs_context = True
                 info.parsed = True  # 标记为已处理，避免重复
                 if DEBUG_CLASSIFIER:
-                    print(f"  ⚠️ AI未返回结果，自动进入二次检测: {info.filename}")
+                    logger.debug(f"  ⚠️ AI未返回结果，自动进入二次检测: {info.filename}")
         
         return media_list
     
@@ -315,7 +318,7 @@ class BatchClassifier:
                     error_msg = result["error"]
                     if progress_callback:
                         progress_callback(processed, total, f"  ❌ 批次 {i+1}-{batch_end} 失败: {error_msg}")
-                    print(f"批次 {i+1}-{batch_end} API 错误: {error_msg}")
+                    logger.warning(f"批次 {i+1}-{batch_end} API 错误: {error_msg}")
                     failed_files += len(batch)
                     if error_msg not in error_messages:
                         error_messages.append(error_msg)
@@ -347,7 +350,7 @@ class BatchClassifier:
                 progress_callback(total, total, f"二次检测中: {len(needs_context)} 个文件需要上下文...")
             
             if DEBUG_CLASSIFIER:
-                print(f"\n🔄 开始二次检测: {len(needs_context)} 个文件")
+                logger.debug(f"\n🔄 开始二次检测: {len(needs_context)} 个文件")
             
             # 分批进行二次检测
             for i in range(0, len(needs_context), options.batch_size):
@@ -361,7 +364,7 @@ class BatchClassifier:
                 batch_end = min(i + options.batch_size, len(needs_context))
                 
                 if DEBUG_CLASSIFIER:
-                    print(f"  📦 二次检测批次: {i+1}-{batch_end} / {len(needs_context)}")
+                    logger.debug(f"  📦 二次检测批次: {i+1}-{batch_end} / {len(needs_context)}")
                 
                 if progress_callback:
                     progress_callback(
@@ -377,12 +380,12 @@ class BatchClassifier:
                         if progress_callback:
                             progress_callback(total, total, f"  ❌ 二次检测失败: {result['error']}")
                         if DEBUG_CLASSIFIER:
-                            print(f"  ❌ 二次检测失败: {result['error']}")
+                            logger.debug(f"  ❌ 二次检测失败: {result['error']}")
                     else:
                         # 应用结果（会覆盖之前的 needs_context 状态）
                         results_count = len(result.get("results", []) or result.get("files", []))
                         if DEBUG_CLASSIFIER:
-                            print(f"  ✅ 二次检测完成: 收到 {results_count} 个结果")
+                            logger.debug(f"  ✅ 二次检测完成: 收到 {results_count} 个结果")
                         
                         self.classifier.apply_results(batch, result)
                         # 清除 needs_context 标记
@@ -392,7 +395,7 @@ class BatchClassifier:
                     if progress_callback:
                         progress_callback(total, total, f"  ⚠️ 二次检测出错: {e}")
                     if DEBUG_CLASSIFIER:
-                        print(f"  ⚠️ 二次检测出错: {e}")
+                        logger.warning(f"  ⚠️ 二次检测出错: {e}")
                     failed_files += len(batch)
                     if str(e) not in error_messages:
                         error_messages.append(str(e))

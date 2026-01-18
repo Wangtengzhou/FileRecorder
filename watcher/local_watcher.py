@@ -13,6 +13,9 @@ from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
 from PySide6.QtCore import QObject, Signal
 
+from logger import get_logger
+
+logger = get_logger("watcher")
 
 @dataclass
 class FileEvent:
@@ -74,7 +77,7 @@ class DebouncedEventHandler(FileSystemEventHandler):
     def on_created(self, event: FileSystemEvent):
         if self._should_ignore(event.src_path):
             return
-        print(f"[Watcher] 检测到创建: {event.src_path}")
+        logger.debug(f"检测到创建: {event.src_path}")
         self._add_event(FileEvent(
             event_type='created',
             src_path=event.src_path,
@@ -84,7 +87,7 @@ class DebouncedEventHandler(FileSystemEventHandler):
     def on_deleted(self, event: FileSystemEvent):
         if self._should_ignore(event.src_path):
             return
-        print(f"[Watcher] 检测到删除: {event.src_path}")
+        logger.debug(f"检测到删除: {event.src_path}")
         self._add_event(FileEvent(
             event_type='deleted',
             src_path=event.src_path,
@@ -96,7 +99,7 @@ class DebouncedEventHandler(FileSystemEventHandler):
             return  # 忽略目录修改事件
         if self._should_ignore(event.src_path):
             return
-        print(f"[Watcher] 检测到修改: {event.src_path}")
+        logger.debug(f"检测到修改: {event.src_path}")
         self._add_event(FileEvent(
             event_type='modified',
             src_path=event.src_path,
@@ -106,7 +109,7 @@ class DebouncedEventHandler(FileSystemEventHandler):
     def on_moved(self, event: FileSystemEvent):
         if self._should_ignore(event.src_path):
             return
-        print(f"[Watcher] 检测到移动: {event.src_path} -> {event.dest_path}")
+        logger.debug(f"检测到移动: {event.src_path} -> {event.dest_path}")
         self._add_event(FileEvent(
             event_type='moved',
             src_path=event.src_path,
@@ -132,7 +135,7 @@ class LocalWatcher(QObject):
     def add_watch(self, path: str, debounce_seconds: float = 1.0) -> bool:
         """添加目录监控"""
         if path in self._observers:
-            print(f"[Watcher] 目录已在监控中: {path}")
+            logger.debug(f"目录已在监控中: {path}")
             return True
         
         try:
@@ -150,11 +153,11 @@ class LocalWatcher(QObject):
             self._observers[path] = observer
             self._handlers[path] = handler
             
-            print(f"[Watcher] 开始监控本地目录: {path}")
+            logger.info(f"开始监控本地目录: {path}")
             return True
             
         except Exception as e:
-            print(f"[Watcher] 监控目录失败: {path} - {e}")
+            logger.warning(f"监控目录失败: {path} - {e}")
             return False
     
     def remove_watch(self, path: str):
@@ -164,7 +167,7 @@ class LocalWatcher(QObject):
             self._observers[path].join(timeout=2)
             del self._observers[path]
             del self._handlers[path]
-            print(f"[Watcher] 停止监控本地目录: {path}")
+            logger.info(f"停止监控本地目录: {path}")
     
     def stop_all(self):
         """停止所有监控"""
@@ -173,7 +176,7 @@ class LocalWatcher(QObject):
     
     def _on_events(self, folder_path: str, events: list[FileEvent]):
         """事件回调"""
-        print(f"[Watcher] 目录 {folder_path} 有 {len(events)} 个变化")
+        logger.info(f"目录 {folder_path} 有 {len(events)} 个变化")
         self.changes_detected.emit(folder_path, events)
     
     @property

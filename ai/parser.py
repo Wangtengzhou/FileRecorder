@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass, field
 
+from logger import get_logger
+
+logger = get_logger("ai")
 
 # 视频文件扩展名
 VIDEO_EXTENSIONS = {
@@ -118,7 +121,7 @@ class MediaParser:
                 for dirname in dirnames:
                     if dirname.upper() in DISC_FOLDERS:
                         disc_roots.add(dirpath)
-                        print(f"  检测到原盘: {dirpath} ({dirname})")
+                        logger.debug(f"  检测到原盘: {dirpath} ({dirname})")
                 
                 # 检查当前目录是否在原盘内
                 in_disc = False
@@ -150,7 +153,7 @@ class MediaParser:
                     break  # 不递归则只处理第一层
                     
         except Exception as e:
-            print(f"扫描目录出错 {directory}: {e}")
+            logger.warning(f"扫描目录出错 {directory}: {e}")
         
         # 添加原盘记录
         for disc_path in disc_roots:
@@ -165,7 +168,7 @@ class MediaParser:
         if skipped_small > 0:
             skip_info.append(f"小文件 {skipped_small}")
         skip_str = f", 跳过({', '.join(skip_info)})" if skip_info else ""
-        print(f"扫描完成: 文件 {file_count}, 视频 {video_count}{skip_str}, 原盘 {len(disc_roots)}")
+        logger.info(f"扫描完成: 文件 {file_count}, 视频 {video_count}{skip_str}, 原盘 {len(disc_roots)}")
         
         return results
     
@@ -179,7 +182,7 @@ class MediaParser:
                     parent = item.parent
                     disc_type = 'BluRay' if item.name.upper() == 'BDMV' else 'DVD'
                     disc_roots[parent] = disc_type
-                    print(f"  检测到原盘: {parent} ({disc_type})")
+                    logger.debug(f"  检测到原盘: {parent} ({disc_type})")
         
         return disc_roots
     
@@ -247,7 +250,7 @@ class MediaParser:
             return info, ''
             
         except Exception as e:
-            print(f"解析文件失败 {filepath}: {e}")
+            logger.warning(f"解析文件失败 {filepath}: {e}")
             return None, 'error'
     
     def _parse_disc(self, disc_path: Path, disc_type: str) -> MediaInfo:

@@ -12,7 +12,9 @@ from .config import WatcherConfig, MonitoredFolder
 from .local_watcher import LocalWatcher, FileEvent
 from .network_poller import NetworkPoller
 
+from logger import get_logger
 
+logger = get_logger("watcher")
 class FileWatcherManager(QObject):
     """
     文件监控管理器
@@ -52,19 +54,19 @@ class FileWatcherManager(QObject):
     def start(self):
         """启动监控"""
         if not self.config.is_enabled():
-            print("[Watcher] 功能未启用，跳过启动")
+            logger.info("功能未启用，跳过启动")
             self._update_status()
             return
         
         if self._running:
-            print("[Watcher] 已在运行中")
+            logger.debug("已在运行中")
             return
         
-        print("[Watcher] 启动目录监控")
+        logger.info("启动目录监控")
         self._running = True
         
         folders = self.config.get_enabled_folders()
-        print(f"[Watcher] 加载 {len(folders)} 个监控目录")
+        logger.info(f"加载 {len(folders)} 个监控目录")
         
         for folder in folders:
             self._start_folder_watch(folder)
@@ -73,7 +75,7 @@ class FileWatcherManager(QObject):
     
     def stop(self):
         """停止监控"""
-        print("[Watcher] 停止目录监控")
+        logger.info("停止目录监控")
         self._running = False
         
         self._local_watcher.stop_all()
@@ -102,13 +104,13 @@ class FileWatcherManager(QObject):
         # 新增的目录
         added = new_set - old_set
         for path in added:
-            print(f"[Watcher] 新增监控: {path}")
+            logger.info(f"新增监控: {path}")
             self._start_folder_watch(new_paths[path])
         
         # 移除的目录
         removed = old_set - new_set
         for path in removed:
-            print(f"[Watcher] 移除监控: {path}")
+            logger.info(f"移除监控: {path}")
             self._stop_folder_watch(path)
         
         # 修改的目录（检查间隔变化等）
@@ -158,7 +160,7 @@ class FileWatcherManager(QObject):
     
     def _on_local_changes(self, folder_path: str, events: list[FileEvent]):
         """本地目录变化回调"""
-        print(f"[Watcher] 本地目录变化: {folder_path}, {len(events)} 个事件")
+        logger.info(f"本地目录变化: {folder_path}, {len(events)} 个事件")
         
         # 更新 mtime
         try:
@@ -179,7 +181,7 @@ class FileWatcherManager(QObject):
     
     def _on_network_changes(self, folder_path: str, new_mtime: float):
         """网络目录变化回调"""
-        print(f"[Watcher] 网络目录变化: {folder_path}")
+        logger.info(f"网络目录变化: {folder_path}")
         
         # 更新 mtime
         folders = self.config.get_all_folders()

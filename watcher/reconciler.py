@@ -10,6 +10,9 @@ from dataclasses import dataclass, field
 
 from .config import WatcherConfig, MonitoredFolder
 
+from logger import get_logger
+
+logger = get_logger("watcher")
 
 @dataclass
 class FileChange:
@@ -69,7 +72,7 @@ class Reconciler:
         Returns:
             (changed_folders, error_folders): 有变化的目录列表, 无法访问的目录列表
         """
-        print("[Watcher] 开始启动对账...")
+        logger.info("开始启动对账...")
         
         changed = []
         errors = []
@@ -79,24 +82,24 @@ class Reconciler:
             
             if not result.accessible:
                 errors.append(result)
-                print(f"[Watcher]   {folder.path}: ⚠️ 无法访问 - {result.error_message}")
+                logger.warning(f"  {folder.path}: ⚠️ 无法访问 - {result.error_message}")
             elif result.is_new_folder:
                 changed.append(result)
-                print(f"[Watcher]   {folder.path}: 新目录（未索引）")
+                logger.info(f"  {folder.path}: 新目录（未索引）")
             elif result.old_mtime is None:
                 # 首次检查，但目录已存在于索引中
-                print(f"[Watcher]   {folder.path}: 首次检查")
+                logger.info(f"  {folder.path}: 首次检查")
                 self.config.update_folder_mtime(folder.id, result.new_mtime)
             elif result.new_mtime != result.old_mtime:
                 # mtime 变化，检测具体文件变化
                 if self.db:
                     self._detect_file_changes(result)
                 changed.append(result)
-                print(f"[Watcher]   {folder.path}: {result.summary}")
+                logger.info(f"  {folder.path}: {result.summary}")
             else:
-                print(f"[Watcher]   {folder.path}: 无变化")
+                logger.debug(f"  {folder.path}: 无变化")
         
-        print(f"[Watcher] 对账完成: {len(changed)} 个目录有变化, {len(errors)} 个无法访问")
+        logger.info(f"对账完成: {len(changed)} 个目录有变化, {len(errors)} 个无法访问")
         return changed, errors
     
     def _check_folder(self, folder: MonitoredFolder) -> FolderChange:
@@ -175,7 +178,7 @@ class Reconciler:
                     except:
                         pass
         except Exception as e:
-            print(f"[Watcher]     扫描目录失败: {e}")
+            logger.warning(f"    扫描目录失败: {e}")
             return
         
         # 获取索引中的文件

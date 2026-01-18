@@ -77,6 +77,7 @@ class Config:
                     saved_config = json.load(f)
                     self._deep_update(self._config, saved_config)
             except (json.JSONDecodeError, IOError) as e:
+                # 使用 print 而非 logger，因为 config.py 在 logger 之前加载
                 print(f"加载配置失败: {e}，使用默认配置")
     
     def save(self) -> None:

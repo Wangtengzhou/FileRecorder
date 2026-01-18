@@ -10,6 +10,9 @@ from PySide6.QtCore import QObject, Signal, QTimer
 
 from .config import MonitoredFolder
 
+from logger import get_logger
+
+logger = get_logger("watcher")
 
 class NetworkPoller(QObject):
     """
@@ -37,7 +40,7 @@ class NetworkPoller(QObject):
         path = folder.path
         
         if path in self._timers:
-            print(f"[Watcher] 目录已在轮询中: {path}")
+            logger.debug(f"目录已在轮询中: {path}")
             return True
         
         # 记录初始 mtime
@@ -51,7 +54,7 @@ class NetworkPoller(QObject):
         timer.start(interval_ms)
         
         self._timers[path] = timer
-        print(f"[Watcher] 开始轮询网络目录: {path} (间隔 {folder.poll_interval_minutes} 分钟)")
+        logger.info(f"开始轮询网络目录: {path} (间隔 {folder.poll_interval_minutes} 分钟)")
         
         # 立即执行一次检查
         QTimer.singleShot(1000, lambda p=path: self._poll(p))
@@ -67,14 +70,14 @@ class NetworkPoller(QObject):
                 del self._last_mtime[path]
             if path in self._retry_info:
                 del self._retry_info[path]
-            print(f"[Watcher] 停止轮询网络目录: {path}")
+            logger.info(f"停止轮询网络目录: {path}")
     
     def update_interval(self, path: str, interval_minutes: int):
         """更新轮询间隔"""
         if path in self._timers:
             interval_ms = interval_minutes * 60 * 1000
             self._timers[path].setInterval(interval_ms)
-            print(f"[Watcher] 更新轮询间隔: {path} -> {interval_minutes} 分钟")
+            logger.info(f"更新轮询间隔: {path} -> {interval_minutes} 分钟")
     
     def stop_all(self):
         """停止所有轮询"""
@@ -93,15 +96,15 @@ class NetworkPoller(QObject):
                 # 恢复正常轮询间隔
                 self._restore_normal_interval(path)
                 self.connection_restored.emit(path)
-                print(f"[Watcher] 连接恢复: {path}")
+                logger.info(f"连接恢复: {path}")
             
             # 检查变化
             last_mtime = self._last_mtime.get(path)
             if last_mtime and current_mtime != last_mtime:
-                print(f"[Watcher] 轮询检测到变化: {path}")
+                logger.info(f"轮询检测到变化: {path}")
                 self.changes_detected.emit(path, current_mtime)
             else:
-                print(f"[Watcher] 轮询检查: {path} 无变化")
+                logger.debug(f"轮询检查: {path} 无变化")
             
             self._last_mtime[path] = current_mtime
             
@@ -110,7 +113,7 @@ class NetworkPoller(QObject):
     
     def _handle_error(self, path: str, error_message: str):
         """处理连接错误（退避重试）"""
-        print(f"[Watcher] ⚠️ 轮询失败: {path} - {error_message}")
+        logger.warning(f"⚠️ 轮询失败: {path} - {error_message}")
         
         if path not in self._retry_info:
             self._retry_info[path] = {
@@ -130,7 +133,7 @@ class NetworkPoller(QObject):
         else:  # 10分钟后
             next_interval = 300
         
-        print(f"[Watcher]   下次重试: {next_interval}秒后")
+        logger.debug(f"  下次重试: {next_interval}秒后")
         
         # 调整定时器间隔
         if path in self._timers:

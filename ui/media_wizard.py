@@ -20,6 +20,9 @@ from ai.classifier import MediaClassifier, BatchClassifier, ClassifyOptions
 from ai.report import ReportGenerator, ReportOptions
 from scanner.file_scanner import FileScanner
 from config import config
+from logger import get_logger
+
+logger = get_logger("ui")
 
 # 默认标签列表
 DEFAULT_TAGS = ["电影", "电视剧", "动漫", "纪录片", "综艺", "NSFW", "其他"]
@@ -171,7 +174,7 @@ class ScanWorker(QThread):
                 try:
                     # 获取该目录下的所有文件
                     files = self.db.get_files_by_folder(directory) if self.db else []
-                    print(f"数据库查询: {directory} → {len(files)} 个文件")
+                    logger.debug(f"数据库查询: {directory} → {len(files)} 个文件")
                     
                     # 第一遍：识别原盘目录和 ISO 文件
                     iso_files = []  # ISO 原盘文件
@@ -195,9 +198,9 @@ class ScanWorker(QThread):
                     
                     # 输出识别到的原盘
                     if disc_roots or iso_files:
-                        print(f"  发现原盘: BDMV/DVD {len(disc_roots)} 个, ISO {len(iso_files)} 个")
+                        logger.debug(f"  发现原盘: BDMV/DVD {len(disc_roots)} 个, ISO {len(iso_files)} 个")
                         for dr in disc_roots:
-                            print(f"    - {dr}")
+                            logger.debug(f"    - {dr}")
                     
                     # 第二遍：筛选文件，统计跳过原因
                     skipped_non_video = 0
@@ -241,7 +244,7 @@ class ScanWorker(QThread):
                         all_media.append(info)
                     
                     # 输出跳过统计
-                    print(f"目录 {directory}: 总文件 {len(files)}, 非视频 {skipped_non_video}, 原盘内 {skipped_in_disc}, 小文件 {skipped_small}")
+                    logger.debug(f"目录 {directory}: 总文件 {len(files)}, 非视频 {skipped_non_video}, 原盘内 {skipped_in_disc}, 小文件 {skipped_small}")
                     
                     # 原盘作为单独项目添加，计算体积
                     for disc_root in disc_roots:
@@ -291,7 +294,7 @@ class ScanWorker(QThread):
             
             # 统计日志
             disc_count = len(disc_roots) + len([m for m in all_media if m.extension == '.iso'])
-            print(f"预处理统计: 视频文件 {len(all_media)} 个, 原盘(含ISO) {disc_count} 个")
+            logger.info(f"预处理统计: 视频文件 {len(all_media)} 个, 原盘(含ISO) {disc_count} 个")
             
             total_files = len(all_media)
             self.progress.emit(30, 100, f"共筛选出 {total_files} 个视频文件")
@@ -404,7 +407,7 @@ class ScanWorker(QThread):
                         if getattr(info, 'is_disc', False) and info.extension == '.disc':
                             folder_attempts += 1
                             if info.media_type:
-                                print(f"  📂 尝试更新 BDMV 文件夹: {info.filepath} → {info.media_type}")
+                                logger.debug(f"  📂 尝试更新 BDMV 文件夹: {info.filepath} → {info.media_type}")
                                 success = self.db.update_folder_ai_tags(
                                     info.filepath,
                                     info.media_type,
@@ -412,9 +415,9 @@ class ScanWorker(QThread):
                                 )
                                 if success:
                                     folder_updates += 1
-                                    print(f"    ✅ 更新成功")
+                                    logger.debug(f"    ✅ 更新成功")
                                 else:
-                                    print(f"    ❌ 未找到匹配的文件夹")
+                                    logger.debug(f"    ❌ 未找到匹配的文件夹")
                     
                     if folder_updates > 0:
                         self.progress.emit(100, 100, f"  → 已更新 {folder_updates} 个 BDMV 原盘文件夹的分类")

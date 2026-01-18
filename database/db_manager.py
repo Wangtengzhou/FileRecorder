@@ -8,6 +8,9 @@ from typing import Optional
 from contextlib import contextmanager
 from functools import lru_cache
 
+from logger import get_logger
+
+logger = get_logger("database")
 
 class DatabaseManager:
     """SQLite 数据库管理器"""
@@ -470,7 +473,7 @@ class DatabaseManager:
                 """, (normalized_path, ai_category, ai_tags))
                 return True
             except Exception as e:
-                print(f"    创建文件夹记录失败: {e}")
+                logger.warning(f"    创建文件夹记录失败: {e}")
                 return False
     
     def get_all_extensions(self) -> list[tuple[str, int]]:
@@ -753,6 +756,28 @@ class DatabaseManager:
                         'ai_category': row['ai_category'] or '',
                         'ai_tags': row['ai_tags'] or '',
                     })
+            
+            # 额外查询 files 表中的目录记录（is_dir=1）
+            # 这些目录可能不在 folders 表中（如只有子目录没有文件的目录）
+            if current_folder_id:
+                cursor.execute("""
+                    SELECT f.filename, f.id
+                    FROM files f
+                    WHERE f.folder_id = ? AND f.is_dir = 1
+                """, (current_folder_id,))
+                
+                for row in cursor.fetchall():
+                    dir_name = row['filename']
+                    name_key = dir_name.lower()
+                    if name_key not in dirs_by_name:
+                        dirs_by_name[name_key] = []
+                        dirs_by_name[name_key].append({
+                            'filename': dir_name,
+                            'full_path': folder_path + '\\' + dir_name,
+                            'is_dir': 1,
+                            'ai_category': '',
+                            'ai_tags': '',
+                        })
             
             subdirs_direct = []
             all_variant_paths = []

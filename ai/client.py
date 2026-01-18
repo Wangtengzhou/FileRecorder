@@ -7,6 +7,9 @@ import urllib.error
 from typing import Optional, Tuple
 
 from config import config
+from logger import get_logger
+
+logger = get_logger("ai")
 
 # 调试开关 - 开发时设为 True，发布时设为 False
 DEBUG = True
@@ -58,15 +61,15 @@ class AIClient:
             
             # 调试输出
             if DEBUG:
-                print("=" * 50)
-                print("🔍 API 连接测试")
-                print("=" * 50)
-                print(f"📌 请求地址: {url}")
-                print(f"📌 模型名称: {self.model}")
-                print(f"📌 API 密钥: {self.api_key[:8]}...{self.api_key[-4:]}")
-                print(f"📌 请求数据: {data}")
-                print("-" * 50)
-                print("⏳ 正在发送请求...")
+                logger.debug("=" * 50)
+                logger.debug("🔍 API 连接测试")
+                logger.debug("=" * 50)
+                logger.debug(f"📌 请求地址: {url}")
+                logger.debug(f"📌 模型名称: {self.model}")
+                logger.debug(f"📌 API 密钥: {self.api_key[:8]}...{self.api_key[-4:]}")
+                logger.debug(f"📌 请求数据: {data}")
+                logger.debug("-" * 50)
+                logger.debug("⏳ 正在发送请求...")
             
             headers = {
                 "Content-Type": "application/json",
@@ -83,9 +86,9 @@ class AIClient:
             with urllib.request.urlopen(req, timeout=10) as response:
                 result = json.loads(response.read().decode("utf-8"))
                 if DEBUG:
-                    print(f"✅ 响应状态: {response.status}")
-                    print(f"✅ 响应内容: {result}")
-                    print("=" * 50)
+                    logger.debug(f"✅ 响应状态: {response.status}")
+                    logger.debug(f"✅ 响应内容: {result}")
+                    logger.debug("=" * 50)
                 if "choices" in result:
                     return True, "API 连接成功"
                 else:
@@ -101,9 +104,9 @@ class AIClient:
                 msg = str(e)
             
             if DEBUG:
-                print(f"❌ HTTP 错误: {e.code}")
-                print(f"❌ 错误内容: {error_body or msg}")
-                print("=" * 50)
+                logger.warning(f"❌ HTTP 错误: {e.code}")
+                logger.warning(f"❌ 错误内容: {error_body or msg}")
+                logger.debug("=" * 50)
             
             if e.code == 401:
                 return False, "API 密钥无效"
@@ -116,13 +119,13 @@ class AIClient:
                 
         except urllib.error.URLError as e:
             if DEBUG:
-                print(f"❌ 网络错误: {e.reason}")
-                print("=" * 50)
+                logger.warning(f"❌ 网络错误: {e.reason}")
+                logger.debug("=" * 50)
             return False, f"网络错误: {str(e.reason)}"
         except Exception as e:
             if DEBUG:
-                print(f"❌ 未知错误: {e}")
-                print("=" * 50)
+                logger.warning(f"❌ 未知错误: {e}")
+                logger.debug("=" * 50)
             return False, f"未知错误: {str(e)}"
     
     def chat(self, messages: list, **kwargs) -> Optional[str]:
@@ -176,20 +179,20 @@ class AIClient:
                     error_msg = f"API 错误 HTTP {e.code}: {detail}"
             except:
                 pass
-            print(f"❌ {error_msg}")
+            logger.warning(f"❌ {error_msg}")
             # 存储最后一次错误供外部读取
             self.last_error = error_msg
             return None
             
         except urllib.error.URLError as e:
             error_msg = f"网络错误: {e.reason}"
-            print(f"❌ {error_msg}")
+            logger.warning(f"❌ {error_msg}")
             self.last_error = error_msg
             return None
             
         except Exception as e:
             error_msg = f"AI 请求失败: {e}"
-            print(f"❌ {error_msg}")
+            logger.warning(f"❌ {error_msg}")
             self.last_error = error_msg
             return None
 

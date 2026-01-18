@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Callable, Optional
 from datetime import datetime
 
+from logger import get_logger
+
+logger = get_logger("export")
 
 class HtmlExporter:
     """HTML 导出器"""
@@ -82,7 +85,7 @@ class HtmlExporter:
             return True
             
         except Exception as e:
-            print(f"HTML 导出失败: {e}")
+            logger.warning(f"HTML 导出失败: {e}")
             return False
     
     def _get_all_files(self) -> list:
