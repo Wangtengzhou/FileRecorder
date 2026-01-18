@@ -46,7 +46,7 @@ class ScanProgressDialog(QDialog):
         layout.addWidget(self.current_label)
         
         # 已扫描数量
-        self.count_label = QLabel("已扫描: 0 个项目")
+        self.count_label = QLabel("已扫描: 0 个文件 | 0 个文件夹")
         self.count_label.setStyleSheet("font-size: 14px;")
         layout.addWidget(self.count_label)
         
@@ -102,10 +102,10 @@ class ScanProgressDialog(QDialog):
         self.setWindowTitle(title)
     
     @Slot(int, int, str)
-    def update_progress(self, current: int, total: int, filename: str):
+    def update_progress(self, files: int, folders: int, filename: str):
         """更新进度"""
         # 更新计数
-        self.count_label.setText(f"已扫描: {current:,} 个项目")
+        self.count_label.setText(f"已扫描: {files:,} 个文件 | {folders:,} 个文件夹")
         
         # 更新当前文件（截断过长路径）
         display_path = filename
@@ -136,7 +136,7 @@ class ScanProgressDialog(QDialog):
             self.title_label.setText("⏳ 正在终止...")
             self.stop_requested.emit()
     
-    def set_finished(self, success_count: int, error_count: int = 0):
+    def set_finished(self, file_count: int, folder_count: int = 0, error_count: int = 0):
         """设置为完成状态 - 成果展示"""
         # 隐藏扫描中的内容
         self.current_label.hide()
@@ -150,7 +150,7 @@ class ScanProgressDialog(QDialog):
         self.progress_bar.setValue(100)
         
         # 显示成果展示（使用预创建的控件）
-        self.success_label.setText(f"📁 成功扫描: {success_count:,} 个项目")
+        self.success_label.setText(f"📁 成功扫描: {file_count:,} 个文件 | {folder_count:,} 个文件夹")
         self.success_label.show()
         
         # 失败数量（仅在有错误时显示）

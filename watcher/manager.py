@@ -1,6 +1,8 @@
 """
-文件监控管理器
-统一管理本地监控（watchdog）和网络轮询
+FileRecorder - 智能文件索引助手
+https://github.com/Wangtengzhou/FileRecorder
+
+文件监控管理器 - 统一管理本地监控（watchdog）和网络轮询
 """
 import os
 import time

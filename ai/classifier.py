@@ -1,6 +1,8 @@
 """
-AI 分类服务模块
-所有文件都交给 AI 识别，本地只做预处理
+FileRecorder - 智能文件索引助手
+https://github.com/Wangtengzhou/FileRecorder
+
+AI 分类服务模块 - 所有文件都交给 AI 识别，本地只做预处理
 """
 import json
 import re
@@ -200,7 +202,7 @@ class MediaClassifier:
                 info.title = item.get("title", "") or item.get("title_cn", "") or item.get("title_en", "")
                 info.title_en = item.get("title_en", "")  # 兼容旧格式
                 info.year = item.get("year")
-                info.media_type = self._normalize_type(item.get("type", "其他"))
+                info.media_type = self._frc_normalize_type(item.get("type", "其他"))
                 info.resolution = item.get("resolution", "")
                 info.source = item.get("source", "")
                 info.season = item.get("season")
@@ -244,7 +246,7 @@ class MediaClassifier:
         
         return media_list
     
-    def _normalize_type(self, type_str: str) -> str:
+    def _frc_normalize_type(self, type_str: str) -> str:
         """
         标准化类型字符串
         

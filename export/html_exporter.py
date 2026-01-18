@@ -1,6 +1,8 @@
 """
-HTML 导出模块 - 生成可离线浏览的单 HTML 文件
+FileRecorder - 智能文件索引助手
+https://github.com/Wangtengzhou/FileRecorder
 
+HTML 导出模块 - 生成可离线浏览的单 HTML 文件
 """
 import json
 import os

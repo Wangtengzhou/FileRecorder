@@ -68,10 +68,10 @@ class FileBrowserModel(QAbstractTableModel):
                 if item.get('is_dir'):
                     count = item.get('file_count', 0)
                     return f"{count} 项"
-                return self._format_size(item.get('size_bytes', 0))
+                return self._frc_format_size(item.get('size_bytes', 0))
             elif column_key == 'mtime':
                 mtime = item.get('mtime')
-                return self._format_time(mtime) if mtime else ''
+                return self._frc_format_time(mtime) if mtime else ''
             elif column_key == 'ai_category':
                 return item.get('ai_category', '')
             return ''
@@ -409,7 +409,7 @@ class FileBrowserModel(QAbstractTableModel):
         return [item for item in self._items if not item.get('is_dir')]
     
     @staticmethod
-    def _format_size(size_bytes: int) -> str:
+    def _frc_format_size(size_bytes: int) -> str:
         if size_bytes < 1024:
             return f"{size_bytes} B"
         elif size_bytes < 1024 * 1024:
@@ -420,7 +420,7 @@ class FileBrowserModel(QAbstractTableModel):
             return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
     
     @staticmethod
-    def _format_time(timestamp: float) -> str:
+    def _frc_format_time(timestamp: float) -> str:
         from datetime import datetime
         try:
             dt = datetime.fromtimestamp(timestamp)

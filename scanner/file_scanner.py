@@ -1,6 +1,8 @@
 """
-FileRecorder 文件扫描模块
-支持本地及网络路径的递归扫描
+FileRecorder - 智能文件索引助手
+https://github.com/Wangtengzhou/FileRecorder
+
+文件扫描模块 - 支持本地及网络路径的递归扫描
 """
 import os
 import time
@@ -18,7 +20,7 @@ class FileScanner(QObject):
     """文件扫描器"""
     
     # 信号定义
-    progress = Signal(int, int, str)      # current, total, current_file
+    progress = Signal(int, int, str)      # files, folders, current_file
     finished = Signal(dict)                # 扫描结果统计
     error = Signal(str)                    # 错误信息
     file_found = Signal(dict)              # 单个文件信息（用于实时更新）
@@ -94,11 +96,11 @@ class FileScanner(QObject):
                 return True
         return False
     
-    def _is_network_path(self, path: str) -> bool:
+    def _frc_is_network_path(self, path: str) -> bool:
         """检查是否为网络路径"""
         return path.startswith('\\\\') or '://' in path
     
-    def _get_long_path(self, path: str) -> str:
+    def _frc_normalize_path(self, path: str) -> str:
         """获取 Windows 长路径格式（解决 260 字符限制）"""
         path = str(path)
         # 首先统一将正斜杠转换为反斜杠（处理 //synology/PT 格式）
@@ -137,7 +139,7 @@ class FileScanner(QObject):
         """
         try:
             # 使用长路径格式避免 Windows 260 字符限制
-            long_path = self._get_long_path(str(file_path))
+            long_path = self._frc_normalize_path(str(file_path))
             stat = os.stat(long_path)
             
             # 存储时使用原始路径格式（不含 \\?\ 前缀）
@@ -185,7 +187,7 @@ class FileScanner(QObject):
         """
         try:
             # 使用长路径格式避免 Windows 260 字符限制
-            long_path = self._get_long_path(str(dir_path))
+            long_path = self._frc_normalize_path(str(dir_path))
             stat = os.stat(long_path)
             
             # 存储时使用原始路径格式（不含 \\?\ 前缀）
@@ -223,7 +225,7 @@ class FileScanner(QObject):
         self._batch = []  # 重置批次缓存
         self._batch_count = 0
         scan_source = path
-        is_network = self._is_network_path(path)
+        is_network = self._frc_is_network_path(path)
         
         # 风险防护：扫描前先清除该路径的旧记录（避免重复数据）
         if self.db:
@@ -231,6 +233,9 @@ class FileScanner(QObject):
                 self.db.clear_source(scan_source)
             except Exception as e:
                 self.error.emit(f"清理旧记录失败: {e}")
+        
+        # 通知正在清理
+        self.progress.emit(0, 0, "正在清理旧数据... (数据量大时可能较慢)")
         
         files_found = []  # 仅用于兼容旧逻辑（无db时）
         errors = []
@@ -248,16 +253,18 @@ class FileScanner(QObject):
             if root_dir_info:
                 self._add_to_batch(root_dir_info, files_found)
                 scanned_count += 1
-                self.progress.emit(scanned_count, 0, str(root_path))
+                scanned_count += 1
+                self.progress.emit(scanned_count, 1, str(root_path))
             
             # 使用 os.walk 递归遍历（使用长路径格式避免 260 字符限制）
             ignored_dirs = 0  # 统计忽略的目录数
             ignored_files = 0  # 统计忽略的文件数
             successful_files = 0  # 成功读取的文件数
+            successful_folders = 0  # 成功读取的文件夹数
             failed_files = 0  # 读取失败的文件数
             
             # 对于长路径，使用长路径格式
-            walk_path = self._get_long_path(path)
+            walk_path = self._frc_normalize_path(path)
             for dirpath, dirnames, filenames in os.walk(walk_path):
                 if self._cancelled:
                     break
@@ -276,13 +283,16 @@ class FileScanner(QObject):
                     scanned_count += 1
                     
                     # 发送进度信号
-                    self.progress.emit(scanned_count, 0, str(dir_full_path))
+                    self.progress.emit(successful_files, successful_folders, str(dir_full_path))
+                    if progress_callback:
+                        progress_callback(scanned_count, 0, str(dir_full_path))
                     
                     # 获取目录信息
                     dir_info = self._get_dir_info(dir_full_path, scan_source)
                     if dir_info:
                         self._add_to_batch(dir_info, files_found)
                         self.file_found.emit(dir_info)
+                        successful_folders += 1
                     
                     # 检查是否需要写入批次
                     total_inserted += self._flush_batch()
@@ -299,9 +309,9 @@ class FileScanner(QObject):
                     scanned_count += 1
                     
                     # 发送进度信号
-                    self.progress.emit(scanned_count, 0, str(file_path))
+                    self.progress.emit(successful_files, successful_folders, str(file_path))
                     if progress_callback:
-                        progress_callback(scanned_count, 0, str(file_path))
+                        progress_callback(successful_files, successful_folders, str(file_path))
                     
                     # 获取文件信息
                     if is_network:
@@ -329,18 +339,25 @@ class FileScanner(QObject):
         total_inserted += self._flush_batch(force=True)
         
         # 输出扫描统计日志
-        logger.info(f"扫描统计: 成功 {successful_files}, 失败 {failed_files}, 忽略目录 {ignored_dirs}")
+        logger.info(f"扫描统计: 文件 {successful_files}, 文件夹 {successful_folders}, 失败 {failed_files}, 忽略目录 {ignored_dirs}")
         
         # 风险防护：如果用户取消，可选择清理已写入数据
         # 注意：这里保留已扫描数据，用户可在界面中删除
         
         # 计算最终数量
-        final_count = total_inserted if self.db else len(files_found)
+        if not self.db:
+            # 无db模式下，files_found 包含所有 info (文件和文件夹)
+            # 需要重新统计，或者相信 accumulated counts
+             final_count = len(files_found)
+        else:
+             final_count = total_inserted
         
         result = {
             'scan_source': scan_source,
             'files': files_found if not self.db else [],  # 有db时不返回files节省内存
-            'file_count': final_count,
+            'total_count': final_count,       # 总记录数 (兼容)
+            'file_count': successful_files,   # 纯文件数
+            'folder_count': successful_folders, # 纯文件夹数
             'total_size': total_size,
             'error_count': len(errors),
             'errors': errors[:100],  # 最多保留100条错误

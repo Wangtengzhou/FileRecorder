@@ -40,9 +40,9 @@ class FileTableModel(QAbstractTableModel):
         if role == Qt.DisplayRole:
             # 格式化显示
             if column_key == 'size_bytes' and value is not None:
-                return self._format_size(value)
+                return self._frc_format_size(value)
             elif column_key == 'mtime' and value is not None:
-                return self._format_time(value)
+                return self._frc_format_time(value)
             elif column_key == 'extension':
                 # 文件夹显示"文件夹"
                 if row_data.get('is_dir'):
@@ -131,7 +131,7 @@ class FileTableModel(QAbstractTableModel):
         return self._data.copy()
     
     @staticmethod
-    def _format_size(size_bytes: int) -> str:
+    def _frc_format_size(size_bytes: int) -> str:
         """格式化文件大小"""
         if size_bytes < 1024:
             return f"{size_bytes} B"
@@ -143,7 +143,7 @@ class FileTableModel(QAbstractTableModel):
             return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
     
     @staticmethod
-    def _format_time(timestamp: float) -> str:
+    def _frc_format_time(timestamp: float) -> str:
         """格式化时间戳"""
         from datetime import datetime
         try:
@@ -187,4 +187,115 @@ class ElideDelegate(QStyledItemDelegate):
             painter.setPen(opt.palette.text().color())
         painter.setFont(opt.font)
         painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter, elided_text)
+        painter.restore()
+
+
+class HighlightDelegate(QStyledItemDelegate):
+    """自定义代理：搜索词高亮显示"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._search_terms: list[str] = []  # 搜索关键词列表
+        self._highlight_color = QColor(255, 255, 0, 180)  # 黄色高亮
+        self._highlight_color_selected = QColor(255, 200, 0, 200)  # 选中时的高亮
+    
+    def set_search_terms(self, terms: list[str]):
+        """设置搜索关键词列表"""
+        self._search_terms = [t.lower() for t in terms if t]
+    
+    def clear_search_terms(self):
+        """清除搜索关键词"""
+        self._search_terms = []
+    
+    def paint(self, painter, option, index):
+        # 初始化样式选项
+        opt = option
+        self.initStyleOption(opt, index)
+        
+        text = opt.text
+        if not text or not self._search_terms:
+            # 无搜索词时使用默认绘制
+            return super().paint(painter, option, index)
+        
+        # 清空文本，让父类只绘制背景和焦点框
+        opt.text = ""
+        style = opt.widget.style() if opt.widget else None
+        if style:
+            style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+        
+        # 计算可用宽度
+        text_rect = opt.rect.adjusted(4, 0, -4, 0)
+        metrics = QFontMetrics(opt.font)
+        
+        # 省略文本
+        elided_text = metrics.elidedText(text, Qt.ElideRight, text_rect.width())
+        
+        # 查找所有匹配位置
+        text_lower = elided_text.lower()
+        highlights = []  # [(start, end), ...]
+        
+        for term in self._search_terms:
+            start = 0
+            while True:
+                pos = text_lower.find(term, start)
+                if pos == -1:
+                    break
+                highlights.append((pos, pos + len(term)))
+                start = pos + 1
+        
+        # 合并重叠区间
+        if highlights:
+            highlights.sort()
+            merged = [highlights[0]]
+            for start, end in highlights[1:]:
+                if start <= merged[-1][1]:
+                    merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+                else:
+                    merged.append((start, end))
+            highlights = merged
+        
+        painter.save()
+        painter.setFont(opt.font)
+        
+        # 选中状态使用不同颜色
+        is_selected = opt.state & QStyle.State_Selected
+        text_color = opt.palette.highlightedText().color() if is_selected else opt.palette.text().color()
+        highlight_color = self._highlight_color_selected if is_selected else self._highlight_color
+        
+        # 绘制文本（逐段绘制，高亮部分加背景）
+        x = text_rect.left()
+        y = text_rect.top()
+        h = text_rect.height()
+        
+        prev_end = 0
+        for start, end in highlights:
+            # 绘制高亮前的普通文本
+            if start > prev_end:
+                normal_text = elided_text[prev_end:start]
+                painter.setPen(text_color)
+                painter.drawText(x, y, metrics.horizontalAdvance(normal_text), h,
+                               Qt.AlignLeft | Qt.AlignVCenter, normal_text)
+                x += metrics.horizontalAdvance(normal_text)
+            
+            # 绘制高亮文本（带背景）
+            highlight_text = elided_text[start:end]
+            text_width = metrics.horizontalAdvance(highlight_text)
+            
+            # 绘制高亮背景
+            painter.fillRect(x, y + 2, text_width, h - 4, highlight_color)
+            
+            # 绘制高亮文本
+            painter.setPen(text_color)
+            painter.drawText(x, y, text_width, h,
+                           Qt.AlignLeft | Qt.AlignVCenter, highlight_text)
+            x += text_width
+            prev_end = end
+        
+        # 绘制剩余的普通文本
+        if prev_end < len(elided_text):
+            remaining_text = elided_text[prev_end:]
+            painter.setPen(text_color)
+            painter.drawText(x, y, metrics.horizontalAdvance(remaining_text), h,
+                           Qt.AlignLeft | Qt.AlignVCenter, remaining_text)
+        
         painter.restore()

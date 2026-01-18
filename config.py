@@ -1,5 +1,8 @@
 """
-FileRecorder 配置管理模块
+FileRecorder - 智能文件索引助手
+https://github.com/Wangtengzhou/FileRecorder
+
+配置管理模块
 """
 import json
 import sys

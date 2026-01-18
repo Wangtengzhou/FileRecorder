@@ -45,7 +45,7 @@ class DebouncedEventHandler(FileSystemEventHandler):
             '~$', '.swp', '.lock', 'desktop.ini', 'Thumbs.db'
         }
     
-    def _should_ignore(self, path: str) -> bool:
+    def _frc_should_ignore(self, path: str) -> bool:
         """检查是否应忽略该文件"""
         filename = Path(path).name.lower()
         for pattern in self._ignore_patterns:
@@ -75,7 +75,7 @@ class DebouncedEventHandler(FileSystemEventHandler):
         self._schedule_callback()
     
     def on_created(self, event: FileSystemEvent):
-        if self._should_ignore(event.src_path):
+        if self._frc_should_ignore(event.src_path):
             return
         logger.debug(f"检测到创建: {event.src_path}")
         self._add_event(FileEvent(
@@ -85,7 +85,7 @@ class DebouncedEventHandler(FileSystemEventHandler):
         ))
     
     def on_deleted(self, event: FileSystemEvent):
-        if self._should_ignore(event.src_path):
+        if self._frc_should_ignore(event.src_path):
             return
         logger.debug(f"检测到删除: {event.src_path}")
         self._add_event(FileEvent(
@@ -97,7 +97,7 @@ class DebouncedEventHandler(FileSystemEventHandler):
     def on_modified(self, event: FileSystemEvent):
         if event.is_directory:
             return  # 忽略目录修改事件
-        if self._should_ignore(event.src_path):
+        if self._frc_should_ignore(event.src_path):
             return
         logger.debug(f"检测到修改: {event.src_path}")
         self._add_event(FileEvent(
@@ -107,7 +107,7 @@ class DebouncedEventHandler(FileSystemEventHandler):
         ))
     
     def on_moved(self, event: FileSystemEvent):
-        if self._should_ignore(event.src_path):
+        if self._frc_should_ignore(event.src_path):
             return
         logger.debug(f"检测到移动: {event.src_path} -> {event.dest_path}")
         self._add_event(FileEvent(

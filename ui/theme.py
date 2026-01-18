@@ -1,3 +1,9 @@
+"""
+FileRecorder - 智能文件索引助手
+https://github.com/Wangtengzhou/FileRecorder
+
+主题管理模块 - 支持深色/浅色/自动主题
+"""
 import sys
 from PySide6.QtWidgets import QApplication, QStyleFactory
 from PySide6.QtGui import QPalette, QColor, Qt

@@ -1,5 +1,7 @@
 """
 FileRecorder - 智能文件索引助手
+https://github.com/Wangtengzhou/FileRecorder
+
 程序入口
 """
 import sys

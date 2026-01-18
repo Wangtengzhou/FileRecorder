@@ -157,7 +157,7 @@ class ChangeSelectDialog(QDialog):
                         file_item.setForeground(1, QColor("#fd7e14"))
                     
                     # 文件大小
-                    file_item.setText(2, self._format_size(fc.size))
+                    file_item.setText(2, self._frc_format_size(fc.size))
                     file_item.setToolTip(0, fc.path)
                 
                 # 如果有更多文件
@@ -201,7 +201,7 @@ class ChangeSelectDialog(QDialog):
         
         layout.addLayout(btn_layout)
     
-    def _format_size(self, size: int) -> str:
+    def _frc_format_size(self, size: int) -> str:
         """格式化文件大小"""
         if size < 1024:
             return f"{size} B"

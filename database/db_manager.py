@@ -1,6 +1,8 @@
 """
-FileRecorder 数据库管理模块
-使用 SQLite 存储文件索引信息
+FileRecorder - 智能文件索引助手
+https://github.com/Wangtengzhou/FileRecorder
+
+数据库管理模块 - 使用 SQLite 存储文件索引信息
 """
 import sqlite3
 from pathlib import Path
@@ -161,12 +163,18 @@ class DatabaseManager:
                 )
             """)
     
+    def _frc_standardize_path(self, path: str) -> str:
+        """标准化文件路径格式（统一斜杠方向，去除尾部斜杠）"""
+        if not path:
+            return ""
+        return path.replace('/', '\\').rstrip('\\')
+    
     def _get_or_create_folder_id(self, cursor, folder_path: str, scan_source_id: int = None) -> int:
         """获取或创建文件夹ID（路径去重核心方法，自动填充 parent_id）"""
         if not folder_path:
             return None
         
-        folder_path = folder_path.replace('/', '\\').rstrip('\\')
+        folder_path = self._frc_standardize_path(folder_path)
         
         # 先尝试获取已有的
         cursor.execute("SELECT id FROM folders WHERE path = ?", (folder_path,))
@@ -952,3 +960,9 @@ class DatabaseManager:
             'size_after': size_after,
             'saved': size_before - size_after
         }
+    
+    def analyze_database(self):
+        """更新查询优化器统计信息（轻量级，扫描后自动调用）"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("ANALYZE")
