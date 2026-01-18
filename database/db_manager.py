@@ -322,10 +322,13 @@ class DatabaseManager:
             # 批量插入文件
             records = []
             for f in files:
+                filename = f.get('filename')
+                if not filename:  # 跳过空文件名
+                    continue
                 parent_folder = f.get('parent_folder', '')
                 folder_id = folder_ids.get(parent_folder)
                 records.append((
-                    f.get('filename'),
+                    filename,
                     f.get('extension'),
                     folder_id,
                     f.get('size_bytes'),
@@ -771,11 +774,13 @@ class DatabaseManager:
                 cursor.execute("""
                     SELECT f.filename, f.id
                     FROM files f
-                    WHERE f.folder_id = ? AND f.is_dir = 1
+                    WHERE f.folder_id = ? AND f.is_dir = 1 AND f.filename != ''
                 """, (current_folder_id,))
                 
                 for row in cursor.fetchall():
                     dir_name = row['filename']
+                    if not dir_name:  # 跳过空文件名
+                        continue
                     name_key = dir_name.lower()
                     if name_key not in dirs_by_name:
                         dirs_by_name[name_key] = []

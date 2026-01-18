@@ -148,6 +148,9 @@ class MainWindow(
         # 安装事件过滤器以捕获鼠标侧键
         QApplication.instance().installEventFilter(self)
         
+        # 初始化快捷键
+        self._init_shortcuts()
+        
     def showEvent(self, event):
         """窗口显示事件"""
         super().showEvent(event)
@@ -522,3 +525,113 @@ class MainWindow(
     def closeEvent(self, event):
         """关闭事件 - 委托给 TrayMixin"""
         self._handle_close_event(event)
+    
+    # ========== 快捷键相关 ==========
+    
+    def _init_shortcuts(self):
+        """初始化快捷键"""
+        from PySide6.QtGui import QShortcut, QKeySequence
+        
+        # Ctrl+F 聚焦搜索框
+        QShortcut(QKeySequence("Ctrl+F"), self, self._focus_search)
+        
+        # F5 刷新
+        QShortcut(QKeySequence("F5"), self, self._refresh_data)
+        
+        # Backspace 返回上级目录
+        QShortcut(QKeySequence("Backspace"), self, self._on_backspace)
+        
+        # Alt+Left/Right 后退/前进
+        QShortcut(QKeySequence("Alt+Left"), self, self._on_go_back)
+        QShortcut(QKeySequence("Alt+Right"), self, self._on_go_forward)
+        
+        # Esc 清除搜索
+        QShortcut(QKeySequence("Escape"), self, self._on_escape)
+        
+        # Enter 进入选中文件夹
+        QShortcut(QKeySequence("Return"), self, self._on_enter_selected)
+        
+        # Ctrl+C 复制选中文件路径
+        QShortcut(QKeySequence("Ctrl+C"), self, self._copy_selected_paths)
+        
+        # Delete 删除（预留功能）
+        QShortcut(QKeySequence("Delete"), self, self._on_delete_selected)
+    
+    def _focus_search(self):
+        """聚焦搜索框并全选"""
+        self.search_input.setFocus()
+        self.search_input.selectAll()
+    
+    def _on_backspace(self):
+        """Backspace 键处理 - 如果搜索框没有焦点则返回上级"""
+        if not self.search_input.hasFocus():
+            self._on_go_back()
+    
+    def _on_escape(self):
+        """Esc 键处理 - 清除搜索或取消焦点"""
+        if self.search_input.text():
+            self._on_clear_search()
+        else:
+            # 如果搜索框有焦点，移除焦点
+            if self.search_input.hasFocus():
+                self.file_table.setFocus()
+    
+    def _on_enter_selected(self):
+        """Enter 键进入选中的文件夹"""
+        # 获取当前选中行
+        indexes = self.file_table.selectionModel().selectedRows()
+        if not indexes:
+            return
+        
+        # 获取第一个选中项
+        index = indexes[0]
+        model = self.file_table.model()
+        
+        if hasattr(model, 'get_item'):
+            item = model.get_item(index.row())
+        else:
+            item = model.get_file_at(index.row())
+        
+        if item and item.get('is_dir'):
+            # 进入文件夹
+            folder_path = item.get('full_path', '')
+            if folder_path:
+                self._navigate_to(folder_path)
+    
+    def _copy_selected_paths(self):
+        """复制选中文件的路径到剪贴板"""
+        indexes = self.file_table.selectionModel().selectedRows()
+        if not indexes:
+            return
+        
+        model = self.file_table.model()
+        paths = []
+        
+        for index in indexes:
+            if hasattr(model, 'get_item'):
+                item = model.get_item(index.row())
+            else:
+                item = model.get_file_at(index.row())
+            
+            if item:
+                path = item.get('full_path', '')
+                if path:
+                    paths.append(path)
+        
+        if paths:
+            clipboard = QApplication.clipboard()
+            clipboard.setText('\n'.join(paths))
+            self.statusbar.showMessage(f"已复制 {len(paths)} 个路径到剪贴板", 3000)
+    
+    def _on_delete_selected(self):
+        """删除选中的文件（预留功能）"""
+        indexes = self.file_table.selectionModel().selectedRows()
+        if not indexes:
+            return
+        
+        QMessageBox.information(
+            self,
+            "功能预留",
+            f"已选中 {len(indexes)} 个项目。\n删除功能将在后续版本中实现。"
+        )
+

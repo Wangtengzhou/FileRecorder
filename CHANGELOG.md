@@ -13,6 +13,17 @@
   - 文件日志输出 DEBUG 及以上级别 → `data/filerecorder.log`
   - 日志自动滚动（5MB × 3份备份）
   - 涉及模块：watcher、scanner、ai、ui、database、export
+- **快捷键支持**
+  - `Ctrl+F` - 聚焦搜索框
+  - `F5` - 刷新当前视图
+  - `Backspace` - 返回上级目录
+  - `Alt+←/→` - 后退/前进（同鼠标侧键）
+  - `Esc` - 清除搜索
+  - `Enter` - 进入选中文件夹
+  - `Ctrl+C` - 复制选中文件路径
+  - `Delete` - 删除（预留功能）
+  - `Shift+点击` - 范围选择
+  - `Ctrl+点击` - 多选
 
 ### 重构
 - **MainWindow 拆解** (代码质量优化)
