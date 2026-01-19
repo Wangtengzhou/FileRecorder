@@ -45,6 +45,9 @@ class NavigationMixin:
         self._update_nav_ui()
         self.view_toggle_btn.setText("📋 平铺视图")
         
+        # 隐藏空结果提示并显示表格
+        self._hide_empty_hint()
+        
         # 清除状态栏搜索结果提示
         self.statusbar.clearMessage()
     

@@ -293,6 +293,20 @@ class MainWindow(
 
         
         right_layout.addWidget(self.file_table)
+        
+        # 空结果提示标签（初始隐藏）
+        self.empty_hint_label = QLabel()
+        self.empty_hint_label.setAlignment(Qt.AlignCenter)
+        self.empty_hint_label.setStyleSheet("""
+            QLabel {
+                color: #888888;
+                font-size: 14px;
+                padding: 40px;
+            }
+        """)
+        self.empty_hint_label.hide()
+        right_layout.addWidget(self.empty_hint_label)
+        
         splitter.addWidget(right_widget)
         splitter.setSizes([250, 950])
         
@@ -490,12 +504,36 @@ class MainWindow(
             
             self.view_toggle_btn.setText("📂 浏览视图")
             self.back_btn.setEnabled(False)
-            self.path_label.setText(f"搜索结果: '{keyword}' ({len(files)} 个文件)")
             
-            # 只在搜索时显示状态栏消息
-            self.statusbar.showMessage(f"找到 {len(files)} 个匹配文件")
+            if files:
+                self.path_label.setText(f"搜索结果: '{keyword}' ({len(files)} 个文件)")
+                self.statusbar.showMessage(f"找到 {len(files)} 个匹配文件")
+                self._hide_empty_hint()
+            else:
+                # 搜索无结果时显示提示
+                self.path_label.setText(f"搜索结果: '{keyword}' (无匹配)")
+                self.statusbar.showMessage(f"未找到与 \"{keyword}\" 相关的文件")
+                self._show_empty_hint(f"未找到与 \"{keyword}\" 相关的搜索结果")
         else:
             # 空搜索切换回浏览视图
+            self._hide_empty_hint()
+            
+            # 切换回浏览模式
+            self.view_mode = 'browser'
+            self.file_table.setModel(self.browser_model)
+            self.view_toggle_btn.setText("📋 平铺视图")
+            
+            # 重置浏览模式列宽（5列）
+            self.file_table.setColumnWidth(0, 300)  # 名称
+            self.file_table.setColumnWidth(1, 70)   # 类型
+            self.file_table.setColumnWidth(2, 80)   # 大小
+            self.file_table.setColumnWidth(3, 120)  # 时间
+            self.file_table.setColumnWidth(4, 80)   # AI分类
+            
+            # 清除搜索高亮代理
+            self.file_table.setItemDelegateForColumn(0, None)
+            self.file_table.setItemDelegateForColumn(4, None)
+            
             self._on_go_home()
     
     @Slot()
@@ -503,6 +541,24 @@ class MainWindow(
         """清除搜索"""
         self.search_input.clear()
         self.ext_filter.setCurrentIndex(0)
+        self._hide_empty_hint()
+        
+        # 切换回浏览模式
+        self.view_mode = 'browser'
+        self.file_table.setModel(self.browser_model)
+        self.view_toggle_btn.setText("📋 平铺视图")
+        
+        # 重置浏览模式列宽（5列）
+        self.file_table.setColumnWidth(0, 300)  # 名称
+        self.file_table.setColumnWidth(1, 70)   # 类型
+        self.file_table.setColumnWidth(2, 80)   # 大小
+        self.file_table.setColumnWidth(3, 120)  # 时间
+        self.file_table.setColumnWidth(4, 80)   # AI分类
+        
+        # 清除搜索高亮代理
+        self.file_table.setItemDelegateForColumn(0, None)
+        self.file_table.setItemDelegateForColumn(4, None)
+        
         self._refresh_data()
     
     def eventFilter(self, obj, event):
@@ -547,9 +603,6 @@ class MainWindow(
         
         # Esc 清除搜索
         QShortcut(QKeySequence("Escape"), self, self._on_escape)
-        
-        # Enter 进入选中文件夹
-        QShortcut(QKeySequence("Return"), self, self._on_enter_selected)
         
         # Ctrl+C 复制选中文件路径
         QShortcut(QKeySequence("Ctrl+C"), self, self._copy_selected_paths)
@@ -634,4 +687,15 @@ class MainWindow(
             "功能预留",
             f"已选中 {len(indexes)} 个项目。\n删除功能将在后续版本中实现。"
         )
+    
+    def _show_empty_hint(self, message: str):
+        """显示空结果提示"""
+        self.empty_hint_label.setText(message)
+        self.empty_hint_label.show()
+        self.file_table.hide()
+    
+    def _hide_empty_hint(self):
+        """隐藏空结果提示"""
+        self.empty_hint_label.hide()
+        self.file_table.show()
 
