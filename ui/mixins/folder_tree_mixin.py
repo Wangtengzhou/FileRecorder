@@ -5,7 +5,12 @@ FolderTreeMixin - 目录树功能
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QTreeWidgetItem, QMenu, QMessageBox, QApplication
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QTreeWidgetItem, QMenu, QMessageBox, QApplication, QStyle
+
+from logger import get_logger
+
+logger = get_logger("ui")
 
 
 class FolderTreeMixin:
@@ -17,6 +22,10 @@ class FolderTreeMixin:
         只加载扫描源目录作为顶级项目，子目录在展开时动态加载
         """
         self.folder_tree.clear()
+        
+        # 获取系统文件夹图标
+        style = QApplication.style()
+        folder_icon = style.standardIcon(QStyle.SP_DirIcon)
         
         # 连接展开事件（使用标志位避免重复连接/断开警告）
         if hasattr(self, '_tree_expanded_connected') and self._tree_expanded_connected:
@@ -49,6 +58,7 @@ class FolderTreeMixin:
             # 创建顶级项目（如果不存在）
             if top_key not in top_level_items:
                 item = QTreeWidgetItem([top_key])
+                item.setIcon(0, folder_icon)
                 item.setData(0, Qt.UserRole, top_key)
                 item.setData(0, Qt.UserRole + 1, False)  # 标记未加载子目录
                 item.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)  # 显示展开箭头
@@ -70,6 +80,7 @@ class FolderTreeMixin:
                     continue
                 
                 child_item = QTreeWidgetItem([child_name])
+                child_item.setIcon(0, folder_icon)
                 child_item.setData(0, Qt.UserRole, folder)
                 child_item.setData(0, Qt.UserRole + 1, False)  # 未加载
                 child_item.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
@@ -112,7 +123,11 @@ class FolderTreeMixin:
                     break
             
             if not exists:
+                # 获取文件夹图标
+                style = QApplication.style()
+                folder_icon = style.standardIcon(QStyle.SP_DirIcon)
                 child_item = QTreeWidgetItem([subdir['name']])
+                child_item.setIcon(0, folder_icon)
                 child_item.setData(0, Qt.UserRole, subdir['path'])
                 child_item.setData(0, Qt.UserRole + 1, False)
                 if subdir['has_children']:
@@ -304,6 +319,9 @@ class FolderTreeMixin:
         # 删除该路径下的所有文件记录
         deleted_count = self.db.clear_source(folder_path)
         
+        # 同时删除目录本身在 files 表中的记录（is_dir=1）
+        self.db.delete_dir_record(folder_path)
+        
         # 隐藏进度条
         self.progress_bar.setVisible(False)
         
@@ -317,4 +335,6 @@ class FolderTreeMixin:
         self._restore_expanded_paths(expanded_paths)
         
         self.statusbar.showMessage(f"已删除 {deleted_count} 条索引记录", 5000)
+        logger.info(f"用户删除目录索引: {folder_path}, 删除 {deleted_count} 条记录")
         QMessageBox.information(self, "删除完成", f"已删除 {deleted_count} 条索引记录")
+

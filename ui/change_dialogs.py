@@ -6,12 +6,68 @@
 from datetime import datetime
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QTreeWidget, QTreeWidgetItem, QCheckBox, QMessageBox, QHeaderView
+    QTreeWidget, QTreeWidgetItem, QCheckBox, QMessageBox, QHeaderView,
+    QProgressBar
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QColor
 
 from watcher.reconciler import FolderChange
+
+
+class ReconcileProgressDialog(QDialog):
+    """
+    对账进度弹窗：显示启动时检测进度
+    """
+    
+    def __init__(self, folder_count: int, parent=None):
+        super().__init__(parent)
+        self.folder_count = folder_count
+        self.current_index = 0
+        
+        self.setWindowTitle("正在检测变化...")
+        self.setMinimumWidth(400)
+        self.setModal(True)
+        # 无关闭按钮
+        self.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
+        
+        self._init_ui()
+    
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(15)
+        
+        # 图标和消息
+        self.msg_label = QLabel(f"正在检测 {self.folder_count} 个监控目录...")
+        self.msg_label.setStyleSheet("font-size: 14px;")
+        layout.addWidget(self.msg_label)
+        
+        # 当前目录
+        self.current_label = QLabel("准备中...")
+        self.current_label.setStyleSheet("color: #666;")
+        self.current_label.setWordWrap(True)
+        layout.addWidget(self.current_label)
+        
+        # 进度条
+        self.progress = QProgressBar()
+        self.progress.setRange(0, self.folder_count)
+        self.progress.setValue(0)
+        layout.addWidget(self.progress)
+    
+    def update_progress(self, index: int, folder_path: str):
+        """更新进度"""
+        self.current_index = index
+        self.progress.setValue(index)
+        self.current_label.setText(f"检测: {folder_path}")
+        # 强制刷新 UI
+        from PySide6.QtWidgets import QApplication
+        QApplication.processEvents()
+    
+    def finish(self):
+        """完成检测"""
+        self.progress.setValue(self.folder_count)
+        self.current_label.setText("检测完成")
+        QTimer.singleShot(300, self.accept)
 
 
 class ChangeAlertDialog(QDialog):
@@ -30,9 +86,11 @@ class ChangeAlertDialog(QDialog):
         self.change_count = change_count
         self.result_action = None
         
-        self.setWindowTitle("目录变化检测")
+        self.setWindowTitle("目录监控 - 变动检测")
         self.setMinimumWidth(400)
         self.setModal(True)
+        # 完全移除关闭按钮
+        self.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
         
         self._init_ui()
     
@@ -46,7 +104,7 @@ class ChangeAlertDialog(QDialog):
         icon_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(icon_label)
         
-        msg_label = QLabel(f"检测到 {self.change_count} 个监控目录发生了变化\n是否需要更新索引？")
+        msg_label = QLabel(f"您开启了目录监控功能\n检测到 {self.change_count} 个监控目录有文件变动\n是否同步到索引？\n不同步的相关目录将被移除监控")
         msg_label.setStyleSheet("font-size: 14px;")
         msg_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(msg_label)
@@ -60,11 +118,12 @@ class ChangeAlertDialog(QDialog):
         all_btn.setDefault(True)
         btn_layout.addWidget(all_btn)
         
-        select_btn = QPushButton("选择要更新的目录")
+        select_btn = QPushButton("查看详情")
         select_btn.clicked.connect(self._on_select)
         btn_layout.addWidget(select_btn)
         
-        later_btn = QPushButton("下次提醒")
+        later_btn = QPushButton("跳过并移除监控")
+        later_btn.setToolTip("不更新索引，同时移除这些目录的监控")
         later_btn.clicked.connect(self._on_later)
         btn_layout.addWidget(later_btn)
         
@@ -84,6 +143,10 @@ class ChangeAlertDialog(QDialog):
         self.result_action = "later"
         self.remind_later.emit()
         self.accept()
+    
+    def closeEvent(self, event):
+        """阻止通过右上角X关闭，强制用户通过按钮选择"""
+        event.ignore()
 
 
 class ChangeSelectDialog(QDialog):
@@ -100,6 +163,8 @@ class ChangeSelectDialog(QDialog):
         self.setWindowTitle("选择要更新的目录")
         self.setMinimumSize(650, 500)
         self.setModal(True)
+        # 完全移除关闭按钮
+        self.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
         
         self._init_ui()
     
@@ -107,7 +172,7 @@ class ChangeSelectDialog(QDialog):
         layout = QVBoxLayout(self)
         
         # 说明
-        hint = QLabel("以下目录在软件关闭期间发生了变化，请选择要更新索引的目录：")
+        hint = QLabel("以下监控目录有文件变动，勾选需要同步到索引的目录：")
         layout.addWidget(hint)
         
         # 使用 TreeWidget 显示目录和文件变化
@@ -191,12 +256,13 @@ class ChangeSelectDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
         
-        confirm_btn = QPushButton("确认更新")
+        confirm_btn = QPushButton("同步勾选目录")
         confirm_btn.clicked.connect(self._on_confirm)
         btn_layout.addWidget(confirm_btn)
         
-        cancel_btn = QPushButton("取消")
-        cancel_btn.clicked.connect(self.reject)
+        cancel_btn = QPushButton("跳过未勾选并移除其监控")
+        cancel_btn.setToolTip("未勾选的目录不同步，并移除其监控")
+        cancel_btn.clicked.connect(self._on_skip_unselected)
         btn_layout.addWidget(cancel_btn)
         
         layout.addLayout(btn_layout)
@@ -222,10 +288,14 @@ class ChangeSelectDialog(QDialog):
     
     def _on_confirm(self):
         self.selected_changes = []
+        self.skipped_changes = []
         for i in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(i)
+            change = item.data(0, Qt.UserRole)
             if item.checkState(0) == Qt.Checked:
-                self.selected_changes.append(item.data(0, Qt.UserRole))
+                self.selected_changes.append(change)
+            else:
+                self.skipped_changes.append(change)
         
         if not self.selected_changes:
             QMessageBox.warning(self, "提示", "请至少选择一个目录")
@@ -233,6 +303,28 @@ class ChangeSelectDialog(QDialog):
         
         self.accept()
     
+    def _on_skip_unselected(self):
+        """跳过未选目录（移除其监控）"""
+        self.selected_changes = []
+        self.skipped_changes = []
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            change = item.data(0, Qt.UserRole)
+            if item.checkState(0) == Qt.Checked:
+                self.selected_changes.append(change)
+            else:
+                self.skipped_changes.append(change)
+        self.accept()
+    
     def get_selected(self) -> list[FolderChange]:
         """获取用户选择的变化列表"""
         return self.selected_changes
+    
+    def get_skipped(self) -> list[FolderChange]:
+        """获取被跳过的变化列表"""
+        return getattr(self, 'skipped_changes', [])
+    
+    def closeEvent(self, event):
+        """阻止通过右上角X关闭，强制用户通过按钮选择"""
+        event.ignore()
+

@@ -139,11 +139,9 @@ class MainWindow(
         self._update_error_count()
         
         # 启动时检测监控目录变化（延迟执行，等待窗口显示）
+        # 对账完成后会自动启动运行时监控
         from PySide6.QtCore import QTimer
-        QTimer.singleShot(500, self._check_watcher_on_startup)
-        
-        # 延迟启动运行时监控（在启动检测完成后）
-        QTimer.singleShot(2000, self._start_runtime_watcher)
+        QTimer.singleShot(500, self._check_watcher_and_start_monitoring)
         
         # 安装事件过滤器以捕获鼠标侧键
         QApplication.instance().installEventFilter(self)
@@ -607,8 +605,21 @@ class MainWindow(
         # Ctrl+C 复制选中文件路径
         QShortcut(QKeySequence("Ctrl+C"), self, self._copy_selected_paths)
         
-        # Delete 删除（预留功能）
-        QShortcut(QKeySequence("Delete"), self, self._on_delete_selected)
+        # Delete 删除索引
+        QShortcut(QKeySequence("Delete"), self, self._on_delete_key_pressed)
+    
+    def _on_delete_key_pressed(self):
+        """Delete 键处理 - 根据焦点决定删除左侧目录树还是右侧表格"""
+        # 检查左侧目录树是否有焦点
+        if self.folder_tree.hasFocus():
+            item = self.folder_tree.currentItem()
+            if item:
+                folder_path = item.data(0, Qt.UserRole)
+                if folder_path:
+                    self._delete_folder_index(folder_path)
+        else:
+            # 右侧表格删除
+            self._on_delete_selected()
     
     def _focus_search(self):
         """聚焦搜索框并全选"""
@@ -677,16 +688,213 @@ class MainWindow(
             self.statusbar.showMessage(f"已复制 {len(paths)} 个路径到剪贴板", 3000)
     
     def _on_delete_selected(self):
-        """删除选中的文件（预留功能）"""
+        """删除选中的项目（从索引中删除）"""
+        from watcher.config import WatcherConfig
+        
         indexes = self.file_table.selectionModel().selectedRows()
         if not indexes:
             return
         
-        QMessageBox.information(
-            self,
-            "功能预留",
-            f"已选中 {len(indexes)} 个项目。\n删除功能将在后续版本中实现。"
+        model = self.file_table.model()
+        watcher_config = WatcherConfig(self.db)
+        
+        # 收集选中项目信息并分类
+        monitored_items = []  # [(id, path, monitored_folder), ...]
+        non_monitored_items = []  # [(id, path), ...]
+        monitored_dirs = []  # [(path, monitored_folder), ...]
+        non_monitored_dirs = []  # [path, ...]
+        monitored_folders_set = {}  # {folder_id: MonitoredFolder}
+        
+        for index in indexes:
+            if hasattr(model, 'get_item'):
+                item = model.get_item(index.row())
+            elif hasattr(model, 'get_item_at'):
+                item = model.get_item_at(index.row())
+            else:
+                item = model.get_file_at(index.row())
+            
+            if not item:
+                continue
+            
+            full_path = item.get('full_path', '')
+            monitored = watcher_config.is_path_monitored(full_path)
+            
+            if item.get('is_dir'):
+                if monitored:
+                    monitored_dirs.append((full_path, monitored))
+                    monitored_folders_set[monitored.id] = monitored
+                else:
+                    non_monitored_dirs.append(full_path)
+            else:
+                file_id = item.get('id')
+                if file_id:
+                    if monitored:
+                        monitored_items.append((file_id, full_path, monitored))
+                        monitored_folders_set[monitored.id] = monitored
+                    else:
+                        non_monitored_items.append((file_id, full_path))
+        
+        total_monitored = len(monitored_items) + len(monitored_dirs)
+        total_non_monitored = len(non_monitored_items) + len(non_monitored_dirs)
+        total_count = total_monitored + total_non_monitored
+        
+        if total_count == 0:
+            return
+        
+        # 情况3：全部不在监控目录下 - 普通确认
+        if total_monitored == 0:
+            self._do_normal_delete(non_monitored_items, non_monitored_dirs)
+            return
+        
+        # 构建监控目录信息
+        monitored_paths = [f.path for f in monitored_folders_set.values()]
+        monitored_info = "\n".join(monitored_paths[:5]) + ("\n..." if len(monitored_paths) > 5 else "")
+        
+        # 情况1：全部在监控目录下 - 三选项
+        if total_non_monitored == 0:
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("监控保护")
+            msg_box.setIcon(QMessageBox.Warning)
+            msg_box.setText(f"选中的内容所在目录正在被监控：\n\n{monitored_info}")
+            msg_box.setInformativeText("请选择操作：")
+            
+            remove_monitor_btn = msg_box.addButton("去除监控", QMessageBox.ActionRole)
+            remove_both_btn = msg_box.addButton("去除并删除全部记录", QMessageBox.ActionRole)
+            cancel_btn = msg_box.addButton("取消", QMessageBox.RejectRole)
+            
+            msg_box.setDefaultButton(cancel_btn)
+            msg_box.exec()
+            
+            clicked_btn = msg_box.clickedButton()
+            
+            if clicked_btn == cancel_btn:
+                return
+            elif clicked_btn == remove_monitor_btn:
+                # 只去除监控
+                for folder in monitored_folders_set.values():
+                    watcher_config.remove_folder(folder.id)
+                self._refresh_data()
+                logger.info(f"用户去除监控: {monitored_paths}")
+                QMessageBox.information(self, "完成", "已去除监控，索引保留")
+                return
+            else:
+                # 去除监控并删除全部
+                for folder in monitored_folders_set.values():
+                    watcher_config.remove_folder(folder.id)
+                self._do_delete_all(monitored_items, monitored_dirs, [], [])
+                return
+        
+        # 情况2：混合场景 - 四选项
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("监控保护")
+        msg_box.setIcon(QMessageBox.Warning)
+        msg_box.setText(f"部分选中内容所在目录正在被监控：\n\n{monitored_info}")
+        msg_box.setInformativeText(f"监控内: {total_monitored} 项  |  监控外: {total_non_monitored} 项\n\n请选择操作：")
+        
+        only_non_monitored_btn = msg_box.addButton("仅删除非监控文件", QMessageBox.ActionRole)
+        remove_monitor_btn = msg_box.addButton("去除监控", QMessageBox.ActionRole)
+        remove_both_btn = msg_box.addButton("去除并删除全部记录", QMessageBox.ActionRole)
+        cancel_btn = msg_box.addButton("取消", QMessageBox.RejectRole)
+        
+        msg_box.setDefaultButton(cancel_btn)
+        msg_box.exec()
+        
+        clicked_btn = msg_box.clickedButton()
+        
+        if clicked_btn == cancel_btn:
+            return
+        elif clicked_btn == only_non_monitored_btn:
+            # 仅删除非监控文件
+            self._do_normal_delete(non_monitored_items, non_monitored_dirs)
+            return
+        elif clicked_btn == remove_monitor_btn:
+            # 只去除监控
+            for folder in monitored_folders_set.values():
+                watcher_config.remove_folder(folder.id)
+            self._refresh_data()
+            logger.info(f"用户去除监控: {monitored_paths}")
+            QMessageBox.information(self, "完成", "已去除监控，索引保留")
+            return
+        else:
+            # 去除监控并删除全部
+            for folder in monitored_folders_set.values():
+                watcher_config.remove_folder(folder.id)
+            self._do_delete_all(monitored_items, monitored_dirs, non_monitored_items, non_monitored_dirs)
+    
+    def _do_normal_delete(self, items: list, dirs: list):
+        """执行普通删除（非监控）"""
+        total_count = len(items) + len(dirs)
+        if total_count == 0:
+            return
+        
+        msg_parts = []
+        if items:
+            msg_parts.append(f"{len(items)} 个文件")
+        if dirs:
+            msg_parts.append(f"{len(dirs)} 个目录")
+        
+        reply = QMessageBox.question(
+            self, "确认删除",
+            f"确定要从索引中删除以下内容吗？\n\n{' 和 '.join(msg_parts)}\n\n此操作不会删除实际文件。",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
         )
+        
+        if reply != QMessageBox.Yes:
+            return
+        
+        deleted_count = 0
+        
+        if items:
+            file_ids = [item[0] for item in items]
+            file_paths = [item[1] for item in items]
+            deleted_count += self.db.delete_files(file_ids)
+            for path in file_paths:
+                logger.info(f"用户删除索引: {path}")
+        
+        for dir_path in dirs:
+            count = self.db.clear_source(dir_path)
+            deleted_count += count
+            self.db.delete_dir_record(dir_path)
+            logger.info(f"用户删除目录索引: {dir_path}, 删除 {count} 条记录")
+        
+        self._refresh_data()
+        QMessageBox.information(self, "删除完成", f"已从索引中删除 {deleted_count} 条记录")
+    
+    def _do_delete_all(self, monitored_items: list, monitored_dirs: list, non_monitored_items: list, non_monitored_dirs: list):
+        """执行删除全部（监控已去除）"""
+        deleted_count = 0
+        
+        # 删除监控项
+        if monitored_items:
+            file_ids = [item[0] for item in monitored_items]
+            file_paths = [item[1] for item in monitored_items]
+            deleted_count += self.db.delete_files(file_ids)
+            for path in file_paths:
+                logger.info(f"用户删除索引: {path}")
+        
+        for dir_path, _ in monitored_dirs:
+            count = self.db.clear_source(dir_path)
+            deleted_count += count
+            self.db.delete_dir_record(dir_path)
+            logger.info(f"用户删除目录索引: {dir_path}, 删除 {count} 条记录")
+        
+        # 删除非监控项
+        if non_monitored_items:
+            file_ids = [item[0] for item in non_monitored_items]
+            file_paths = [item[1] for item in non_monitored_items]
+            deleted_count += self.db.delete_files(file_ids)
+            for path in file_paths:
+                logger.info(f"用户删除索引: {path}")
+        
+        for dir_path in non_monitored_dirs:
+            count = self.db.clear_source(dir_path)
+            deleted_count += count
+            self.db.delete_dir_record(dir_path)
+            logger.info(f"用户删除目录索引: {dir_path}, 删除 {count} 条记录")
+        
+        self._refresh_data()
+        QMessageBox.information(self, "删除完成", f"已去除监控并删除 {deleted_count} 条记录")
     
     def _show_empty_hint(self, message: str):
         """显示空结果提示"""

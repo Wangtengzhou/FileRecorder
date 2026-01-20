@@ -130,10 +130,15 @@ class WatcherConfig:
         """移除监控目录"""
         with self.db._get_connection() as conn:
             cursor = conn.cursor()
+            # 先获取路径用于日志
+            cursor.execute("SELECT path FROM monitored_folders WHERE id = ?", (folder_id,))
+            row = cursor.fetchone()
+            folder_path = row['path'] if row else f"ID={folder_id}"
+            
             cursor.execute("DELETE FROM monitored_folders WHERE id = ?", (folder_id,))
             success = cursor.rowcount > 0
             if success:
-                logger.info(f"移除监控目录 ID: {folder_id}")
+                logger.info(f"移除监控目录: {folder_path}")
             return success
     
     def update_folder(self, folder_id: int, **kwargs) -> bool:
@@ -171,10 +176,19 @@ class WatcherConfig:
         """
         检查路径是否被监控（包括子路径匹配）
         返回匹配的监控目录，如果没有则返回 None
+        
+        注意：只有在目录监控功能启用且目录已启用时才返回匹配结果
         """
+        # 首先检查全局监控开关，如果关闭则任何目录都不视为监控状态
+        if not self.is_enabled():
+            return None
+        
         path = path.replace('/', '\\').rstrip('\\').lower()
         
         for folder in self.get_all_folders():
+            # 只考虑已启用的监控目录
+            if not folder.enabled:
+                continue
             folder_path = folder.path.lower()
             # 精确匹配或者是子路径
             if path == folder_path or path.startswith(folder_path + '\\'):

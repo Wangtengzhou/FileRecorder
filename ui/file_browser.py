@@ -223,6 +223,7 @@ class FileBrowserModel(QAbstractTableModel):
             # 添加文件
             for f in contents['files']:
                 self._items.append({
+                    'id': f.get('id'),  # 文件ID，用于删除等操作
                     'name': f.get('filename', ''),
                     'full_path': f.get('full_path', ''),
                     'extension': f.get('extension', ''),
@@ -255,6 +256,7 @@ class FileBrowserModel(QAbstractTableModel):
             
             for f in contents['files']:
                 self._items.append({
+                    'id': f.get('id'),  # 文件ID，用于删除等操作
                     'name': f.get('filename', ''),
                     'full_path': f.get('full_path', ''),
                     'extension': f.get('extension', ''),

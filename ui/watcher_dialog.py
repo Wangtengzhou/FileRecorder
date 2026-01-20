@@ -162,6 +162,7 @@ class WatcherDialog(QDialog):
             )
             return
         
+        merge_performed = False
         if conflicts['children']:
             # 新目录是已有目录的父目录
             child_paths = [f.path for f in conflicts['children']]
@@ -187,36 +188,37 @@ class WatcherDialog(QDialog):
             elif clicked == merge_btn:
                 # 合并：移除子目录
                 self.config.merge_to_parent(path, conflicts['children'])
-                # 合并后强制扫描父目录
-                prompt_scan = True
-                scan_message = "已合并子目录监控到父目录，建议立即扫描以确保索引完整。\n\n是否立即扫描？"
-            else:
-                # 全部保留：父目录也需要扫描（因为可能有未索引的文件）
-                prompt_scan = True
-                scan_message = "该父目录下可能存在未索引的文件，建议扫描。\n\n是否立即扫描？"
-        else:
-            prompt_scan = False
-            scan_message = "该目录尚未被索引，是否立即扫描？"
-        
-        # 检查目录是否已在索引中
-        is_indexed = self._check_if_indexed(path)
+                merge_performed = True
         
         # 添加到监控数据库
         folder = self.config.add_folder(path, self.poll_spin.value())
-        if folder:
-            self._load_config()  # 刷新列表
-            
-            # 如果目录未索引，或者有父子冲突需要扫描
-            if not is_indexed or prompt_scan:
-                reply = QMessageBox.question(
-                    self, "扫描目录",
-                    f"{scan_message}\n\n{path}",
-                    QMessageBox.Yes | QMessageBox.No
-                )
-                if reply == QMessageBox.Yes:
-                    # 立即发射扫描请求，不关闭当前窗口
-                    logger.info(f"立即触发扫描: {path}")
-                    self.scan_requested.emit([path])
+        if not folder:
+            QMessageBox.warning(self, "添加失败", "无法添加监控目录")
+            return
+        
+        self._load_config()  # 刷新列表
+        
+        # 统一强制扫描弹窗
+        if merge_performed:
+            scan_message = "已合并子目录监控到父目录，需要扫描以确保索引同步。"
+        else:
+            scan_message = "添加监控目录需要扫描以确保索引同步。"
+        
+        reply = QMessageBox.question(
+            self, "扫描目录",
+            f"{scan_message}\n\n{path}\n\n点击「取消」将移除刚添加的监控。",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            # 开始扫描
+            logger.info(f"立即触发扫描: {path}")
+            self.scan_requested.emit([path])
+        else:
+            # 取消：移除刚添加的监控
+            self.config.remove_folder(folder.id)
+            self._load_config()
+            logger.info(f"用户取消扫描，移除监控: {path}")
     
     def _check_if_indexed(self, path: str) -> bool:
         """检查目录是否已在索引中"""
@@ -284,19 +286,30 @@ class WatcherDialog(QDialog):
         
         # 收集新启用的目录（之前禁用，现在启用）
         newly_enabled = []
+        new_poll_interval = self.poll_spin.value()
         
-        # 保存各目录的启用状态
+        # 保存各目录的启用状态和轮询间隔
         for i in range(self.folder_list.count()):
             item = self.folder_list.item(i)
             folder = item.data(Qt.UserRole)
             enabled = item.checkState() == Qt.Checked
             
+            updates = {}
+            
+            # 检查启用状态变化
             if folder.enabled != enabled:
-                self.config.update_folder(folder.id, enabled=enabled)
-                
+                updates['enabled'] = enabled
                 # 如果是从禁用变为启用
                 if enabled and not folder.enabled:
                     newly_enabled.append(folder.path)
+            
+            # 更新网络目录的轮询间隔
+            if not folder.is_local and folder.poll_interval_minutes != new_poll_interval:
+                updates['poll_interval_minutes'] = new_poll_interval
+                logger.info(f"更新轮询间隔: {folder.path} -> {new_poll_interval}分钟")
+            
+            if updates:
+                self.config.update_folder(folder.id, **updates)
         
         logger.info("配置已保存")
         self.config_changed.emit()

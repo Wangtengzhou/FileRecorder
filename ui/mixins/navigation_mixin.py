@@ -8,6 +8,10 @@ from pathlib import Path
 from PySide6.QtCore import Slot
 from PySide6.QtWidgets import QMessageBox, QMenu
 
+from logger import get_logger
+
+logger = get_logger("ui")
+
 
 class NavigationMixin:
     """导航功能 Mixin"""
@@ -274,10 +278,13 @@ class NavigationMixin:
         copy_action = menu.addAction("复制路径")
         copy_action.triggered.connect(lambda: self._copy_to_clipboard(full_path))
         
-        if not is_dir and file_id:
-            menu.addSeparator()
-            delete_action = menu.addAction("从索引中删除")
-            delete_action.triggered.connect(lambda: self._delete_from_index(file_id))
+        menu.addSeparator()
+        if is_dir:
+            delete_action = menu.addAction("🗑️ 删除此目录索引")
+            delete_action.triggered.connect(lambda: self._delete_from_index(file_path=full_path, is_dir=True))
+        elif file_id:
+            delete_action = menu.addAction("🗑️ 从索引中删除")
+            delete_action.triggered.connect(lambda: self._delete_from_index(file_id=file_id, file_path=full_path))
         
         menu.exec_(self.file_table.viewport().mapToGlobal(pos))
     
@@ -303,7 +310,79 @@ class NavigationMixin:
         QApplication.clipboard().setText(text)
         self.statusbar.showMessage("已复制到剪贴板", 2000)
     
-    def _delete_from_index(self, file_id: int):
-        """从索引中删除"""
-        # TODO: 实现删除功能
-        pass
+    def _delete_from_index(self, file_id: int = None, file_path: str = None, is_dir: bool = False):
+        """从索引中删除单个文件或目录
+        
+        Args:
+            file_id: 文件ID（用于删除单个文件）
+            file_path: 文件/目录路径（用于删除目录及其内容）
+            is_dir: 是否为目录
+        """
+        if is_dir and file_path:
+            # 删除目录索引 - 复用左侧目录树的删除逻辑
+            self._delete_folder_index(file_path)
+        elif file_id and file_path:
+            from watcher.config import WatcherConfig
+            
+            # 检查文件是否在监控目录下
+            watcher_config = WatcherConfig(self.db)
+            monitored_folder = watcher_config.is_path_monitored(file_path)
+            
+            if monitored_folder:
+                # 文件在监控目录下，显示三选项弹窗
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("监控保护")
+                msg_box.setIcon(QMessageBox.Warning)
+                msg_box.setText(f"该文件所在目录正在被监控：\n\n{monitored_folder.path}")
+                msg_box.setInformativeText("请选择操作：")
+                
+                remove_monitor_btn = msg_box.addButton("去除监控", QMessageBox.ActionRole)
+                remove_both_btn = msg_box.addButton("去除并删除记录", QMessageBox.ActionRole)
+                cancel_btn = msg_box.addButton("取消", QMessageBox.RejectRole)
+                
+                msg_box.setDefaultButton(cancel_btn)
+                msg_box.exec()
+                
+                clicked_btn = msg_box.clickedButton()
+                
+                if clicked_btn == cancel_btn:
+                    return
+                elif clicked_btn == remove_monitor_btn:
+                    # 只去除监控
+                    watcher_config.remove_folder(monitored_folder.id)
+                    self._refresh_data()
+                    logger.info(f"用户去除监控: {monitored_folder.path}")
+                    QMessageBox.information(self, "完成", "已去除监控，索引保留")
+                    return
+                else:
+                    # 去除监控并删除记录
+                    watcher_config.remove_folder(monitored_folder.id)
+                    try:
+                        self.db.delete_file(file_id)
+                        self._refresh_data()
+                        logger.info(f"用户去除监控并删除索引: {file_path}")
+                        QMessageBox.information(self, "删除完成", "已去除监控并删除 1 条记录")
+                    except Exception as e:
+                        logger.error(f"删除索引失败: {file_path}, 错误={e}")
+                        QMessageBox.critical(self, "删除失败", f"无法删除: {e}")
+                    return
+            
+            # 文件不在监控目录下，普通删除确认
+            reply = QMessageBox.question(
+                self, "确认删除",
+                "确定要从索引中删除此文件记录吗？\n\n此操作不会删除实际文件。",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            
+            if reply == QMessageBox.Yes:
+                try:
+                    self.db.delete_file(file_id)
+                    self._refresh_data()
+                    logger.info(f"用户删除索引: {file_path}")
+                    QMessageBox.information(self, "删除完成", "已从索引中删除 1 条记录")
+                except Exception as e:
+                    logger.error(f"删除索引失败: {file_path}, 错误={e}")
+                    QMessageBox.critical(self, "删除失败", f"无法删除: {e}")
+
+

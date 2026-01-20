@@ -427,6 +427,63 @@ class DatabaseManager:
                 (category, tags, file_id)
             )
     
+    def delete_file(self, file_id: int) -> bool:
+        """删除单个文件记录
+        
+        Args:
+            file_id: 文件ID
+            
+        Returns:
+            是否删除成功
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM files WHERE id = ?", (file_id,))
+            return cursor.rowcount > 0
+    
+    def delete_files(self, file_ids: list[int]) -> int:
+        """批量删除文件记录
+        
+        Args:
+            file_ids: 文件ID列表
+            
+        Returns:
+            删除的记录数
+        """
+        if not file_ids:
+            return 0
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            placeholders = ','.join('?' * len(file_ids))
+            cursor.execute(f"DELETE FROM files WHERE id IN ({placeholders})", file_ids)
+            return cursor.rowcount
+    
+    def delete_dir_record(self, dir_path: str) -> bool:
+        """删除目录在 files 表中的记录（is_dir=1）
+        
+        Args:
+            dir_path: 目录完整路径
+            
+        Returns:
+            是否删除成功
+        """
+        dir_path = dir_path.replace('/', '\\').rstrip('\\')
+        dir_name = dir_path.split('\\')[-1] if '\\' in dir_path else dir_path
+        parent_path = '\\'.join(dir_path.split('\\')[:-1]) if '\\' in dir_path else ''
+        
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # 获取父目录 folder_id
+            cursor.execute("SELECT id FROM folders WHERE path = ? COLLATE NOCASE", (parent_path,))
+            row = cursor.fetchone()
+            if row:
+                cursor.execute(
+                    "DELETE FROM files WHERE folder_id = ? AND filename = ? AND is_dir = 1",
+                    (row['id'], dir_name)
+                )
+                return cursor.rowcount > 0
+            return False
+    
     def batch_update_ai_tags(self, updates: list[dict]) -> None:
         """
         批量更新AI标签
@@ -593,7 +650,7 @@ class DatabaseManager:
                     subdirs.append({
                         'name': name,
                         'path': path,
-                        'has_children': has_subdirs or has_files
+                        'has_children': has_subdirs  # 只检查是否有子目录，不检查文件
                     })
                 
                 return sorted(subdirs, key=lambda x: x['name'].lower())
@@ -643,7 +700,7 @@ class DatabaseManager:
                 """, (subdir_path,))
                 has_files = cursor.fetchone() is not None
                 
-                subdir['has_children'] = has_subdirs or has_files
+                subdir['has_children'] = has_subdirs  # 只检查是否有子目录
                 result.append(subdir)
             
             return sorted(result, key=lambda x: x['name'].lower())

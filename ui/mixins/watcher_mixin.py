@@ -84,6 +84,7 @@ class WatcherMixin:
         """启动时检测监控目录变化"""
         from watcher.config import WatcherConfig
         from watcher.reconciler import Reconciler
+        from ui.change_dialogs import ReconcileProgressDialog
         
         watcher_config = WatcherConfig(self.db)
         
@@ -98,9 +99,18 @@ class WatcherMixin:
             logger.info("没有监控目录，跳过启动检测")
             return
         
-        # 执行对账
+        # 显示进度弹窗
+        progress_dialog = ReconcileProgressDialog(len(folders), self)
+        progress_dialog.show()
+        
+        # 执行对账（带进度回调）
         reconciler = Reconciler(watcher_config, self.db)
-        changed, errors = reconciler.check_all_folders()
+        changed, errors = reconciler.check_all_folders(
+            progress_callback=progress_dialog.update_progress
+        )
+        
+        # 关闭进度弹窗
+        progress_dialog.finish()
         
         # 处理无法访问的目录（可选：提示用户）
         if errors:
@@ -110,9 +120,20 @@ class WatcherMixin:
         if changed:
             self._show_change_alert(changed, reconciler)
     
+    def _check_watcher_and_start_monitoring(self):
+        """启动时检测变化，完成后再启动运行时监控"""
+        # 1. 先执行对账检测
+        self._check_watcher_on_startup()
+        
+        # 2. 对账完成后启动运行时监控
+        self._start_runtime_watcher()
+    
     def _show_change_alert(self, changes: list, reconciler):
         """显示变化检测弹窗"""
         from ui.change_dialogs import ChangeAlertDialog, ChangeSelectDialog
+        from watcher.config import WatcherConfig
+        
+        watcher_config = WatcherConfig(self.db)
         
         # 第一层弹窗
         alert = ChangeAlertDialog(len(changes), self)
@@ -126,11 +147,22 @@ class WatcherMixin:
             select_dialog = ChangeSelectDialog(changes, self)
             if select_dialog.exec():
                 selected = select_dialog.get_selected()
+                skipped = select_dialog.get_skipped()
+                
+                # 更新选中的目录
                 if selected:
                     self._update_changed_folders(selected, reconciler)
+                
+                # 移除被跳过目录的监控
+                if skipped:
+                    for change in skipped:
+                        watcher_config.remove_folder(change.folder.id)
+                    logger.info(f"用户跳过更新，移除 {len(skipped)} 个目录的监控")
         else:
-            # 下次提醒 - 不做任何操作
-            logger.info("用户选择下次提醒，跳过更新")
+            # 跳过（移除所有监控）
+            for change in changes:
+                watcher_config.remove_folder(change.folder.id)
+            logger.info(f"用户选择跳过更新，移除 {len(changes)} 个目录的监控")
     
     def _update_changed_folders(self, changes: list, reconciler):
         """更新选中的目录索引"""
@@ -146,19 +178,16 @@ class WatcherMixin:
             else:
                 existing_folders.append(change)
         
-        # 1. 新目录：触发完整扫描
+        # 1. 新目录：触发完整扫描（使用静默模式设置）
         if new_folders:
             logger.info(f"触发新目录扫描: {new_folders}")
-            self._on_multi_scan_requested(new_folders)
-            # 扫描完成后会更新 mtime
+            self._on_watcher_scan_requested(new_folders)
         
-        # 2. 已索引目录：触发增量扫描（暂时只更新 mtime，后续实现增量扫描）
+        # 2. 已索引目录：触发增量扫描（使用静默模式设置）
         for change in existing_folders:
             folder = change.folder
             logger.debug(f"  增量更新: {folder.path}")
-            # TODO: 执行实际的增量扫描，对比文件变化并更新索引
-            # 目前先触发完整扫描
-            self._on_multi_scan_requested([folder.path])
+            self._on_watcher_scan_requested([folder.path])
             reconciler.update_folder_mtime(folder, change.new_mtime)
         
         logger.info("索引更新任务已启动")

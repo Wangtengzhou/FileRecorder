@@ -65,9 +65,12 @@ class Reconciler:
         self.config = config
         self.db = db  # 用于查询已索引的文件
     
-    def check_all_folders(self) -> tuple[list[FolderChange], list[FolderChange]]:
+    def check_all_folders(self, progress_callback=None) -> tuple[list[FolderChange], list[FolderChange]]:
         """
         检查所有监控目录的变化（静默，不修改索引）
+        
+        Args:
+            progress_callback: 可选，进度回调函数 (index, folder_path) -> None
         
         Returns:
             (changed_folders, error_folders): 有变化的目录列表, 无法访问的目录列表
@@ -77,7 +80,11 @@ class Reconciler:
         changed = []
         errors = []
         
-        for folder in self.config.get_enabled_folders():
+        folders = self.config.get_enabled_folders()
+        for i, folder in enumerate(folders):
+            # 进度回调
+            if progress_callback:
+                progress_callback(i + 1, folder.path)
             result = self._check_folder(folder)
             
             if not result.accessible:
@@ -96,6 +103,14 @@ class Reconciler:
                     self._detect_file_changes(result)
                 changed.append(result)
                 logger.info(f"  {folder.path}: {result.summary}")
+            elif not folder.is_local and self.db:
+                # 网络目录：即使 mtime 未变，也检测文件变化（网络文件系统 mtime 可能不可靠）
+                self._detect_file_changes(result)
+                if result.total_changes > 0:
+                    changed.append(result)
+                    logger.info(f"  {folder.path}: {result.summary}")
+                else:
+                    logger.debug(f"  {folder.path}: 无变化")
             else:
                 logger.debug(f"  {folder.path}: 无变化")
         
@@ -159,17 +174,51 @@ class Reconciler:
     
     def _detect_file_changes(self, change: FolderChange):
         """检测具体文件变化"""
+        from config import config as app_config
+        
         folder_path = change.folder.path
+        
+        # 从配置读取忽略规则（与扫描器使用相同配置）
+        ignore_patterns = app_config.get("scanner", "ignore_patterns", default=[
+            ".*", "$RECYCLE.BIN", "System Volume Information", "Thumbs.db"
+        ])
+        
+        def should_ignore(name: str) -> bool:
+            """检查是否应该忽略该文件/目录（与扫描器逻辑一致）"""
+            for pattern in ignore_patterns:
+                if pattern.startswith('.') and name.startswith('.'):
+                    return True
+                if name == pattern:
+                    return True
+            return False
         
         # 获取当前目录中的文件
         current_files = {}
         try:
             for item in Path(folder_path).rglob('*'):
                 if item.is_file():
-                    rel_path = str(item)
+                    # 使用与扫描器相同的忽略逻辑
+                    if should_ignore(item.name):
+                        continue
+                    
+                    # 检查父目录是否应该被忽略
+                    skip = False
+                    for parent in item.parents:
+                        if parent == Path(folder_path):
+                            break
+                        if should_ignore(parent.name):
+                            skip = True
+                            break
+                    if skip:
+                        continue
+                    
+                    # 统一使用反斜杠格式（与数据库一致）
+                    rel_path = str(item).replace('/', '\\')
+                    path_lower = rel_path.lower()
+                    
                     try:
                         stat = item.stat()
-                        current_files[rel_path.lower()] = {
+                        current_files[path_lower] = {
                             'path': rel_path,
                             'name': item.name,
                             'mtime': stat.st_mtime,
@@ -187,19 +236,37 @@ class Reconciler:
             cursor = conn.cursor()
             normalized = folder_path.replace('/', '\\').rstrip('\\')
             cursor.execute("""
-                SELECT f.filename, fo.path, f.modified_time, f.size
+                SELECT f.filename, fo.path, f.mtime, f.size_bytes
                 FROM files f
                 JOIN folders fo ON f.folder_id = fo.id
                 WHERE fo.path LIKE ? ESCAPE '\\'
+                  AND (f.is_dir = 0 OR f.is_dir IS NULL)
             """, (normalized.replace('\\', '\\\\') + '%',))
             
             for row in cursor.fetchall():
                 full_path = os.path.join(row['path'], row['filename'])
-                indexed_files[full_path.lower()] = {
+                path_lower = full_path.lower()
+                filename = row['filename']
+                folder_name = row['path']
+                
+                # 应用与当前文件扫描相同的过滤规则
+                if should_ignore(filename):
+                    continue
+                
+                # 检查路径中是否有应被忽略的目录
+                skip = False
+                for part in Path(folder_name).parts:
+                    if should_ignore(part):
+                        skip = True
+                        break
+                if skip:
+                    continue
+                
+                indexed_files[path_lower] = {
                     'path': full_path,
                     'name': row['filename'],
-                    'mtime': row['modified_time'],
-                    'size': row['size']
+                    'mtime': row['mtime'],
+                    'size': row['size_bytes']
                 }
         
         # 对比差异

@@ -56,8 +56,8 @@ class NetworkPoller(QObject):
         self._timers[path] = timer
         logger.info(f"开始轮询网络目录: {path} (间隔 {folder.poll_interval_minutes} 分钟)")
         
-        # 立即执行一次检查
-        QTimer.singleShot(1000, lambda p=path: self._poll(p))
+        # 注意：启动时不立即检查，由对账器统一处理启动检测
+        # 轮询只负责运行时的定期检查
         
         return True
     
